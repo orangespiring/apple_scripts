@@ -8,7 +8,7 @@
  *   3)「更多服务」只留 联系客服+设置，其余推广入口全删
  *   4) 删除每个 section 的 button（推广按钮）
  *
- * 配合 BilibiliFeedBlock.lnplugin 使用。与 BilibiliTabFeed.js（tab/v2）互补——
+ * 配合 BilibiliFeedBlock.lnplugin 使用。与 BilibiliHome.js（tab/v2）互补——
  *   tab/v2 管顶栏/底栏/右上角入口；本脚本管「我的」页内部。
  */
 

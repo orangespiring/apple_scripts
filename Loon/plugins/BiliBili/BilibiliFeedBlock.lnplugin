@@ -18,15 +18,14 @@
 [Argument]
 # —— 本插件独有 ——
 cleanRelates = switch,true,tag=播放页·清空推荐 (和'加载优化'冲突),desc=连正常视频推荐一起清空（关=仅去广告、保留推荐）
-cleanHomeFeed = switch,true,tag=首页·信息流整条清空,desc=非仅去广告，data.items 整条清空（关=不接管首页）
-customTab = switch,true,tag=首页·自定义顶/底栏,desc=改 tab/v2 顶栏/底栏/右上角入口（关=不接管 tab）
+homeShowWatchLater = switch,true,tag=首页·信息流改稍后再看,desc=只控制 feed/index：首页推荐换成「稍后再看」列表（需登录）。顶栏/底栏改造恒开、不受此开关影响
 # —— 常规净化 ——
 cleanSearch = switch,true,tag=搜索页·相关性过滤,desc=视频卡须标题命中搜索词高亮才留、时长<4:00 丢弃（去广告恒开；课程/番剧/用户卡放行）
 cleanMine = switch,true,tag=我的页·精简
 cleanSplash = switch,true,tag=开屏·广告列表清空
 displayUpList = select,"show","hide","auto",tag=动态·[最常访问]显示方式
 purifyComment = switch,true,tag=评论区·过滤置顶广告
-optimizeRequest = switch,true,tag=评论区·加载优化
+optimizeRequest = switch,false,tag=评论区·加载优化
 sponsorBlock = switch,true,tag=播放·空降助手（跳过赞助段）
 logLevel = select,"error","warn","info","debug","off",tag=脚本日志等级
 
@@ -41,11 +40,12 @@ DOMAIN,cm.bilibili.com,REJECT
 # ===== 脚本 =====
 [Script]
 
-# — 首页信息流清空 —
-http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/v2/feed/index script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliEmptyFeed.js, requires-body=1, enable={cleanHomeFeed}, tag=B站·首页信息流清空
+# — 首页改显示稍后再看（feed/index → 稍后再看列表）—
+http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/v2/feed/index script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliHome.js, requires-body=1, enable={homeShowWatchLater}, tag=B站·首页改显示稍后再看
 
-# — 首页 tab 自定义 —
-http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/resource/show/tab/v2 script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliTabFeed.js, requires-body=1, enable={customTab}, tag=B站·首页tab自定义
+# — tab/v2 接管（恒开：右上角入口 data.top + 底栏精简 + 删「…」菜单 恒改；顶栏 tab 折叠成单「稍后再看」仅当 homeShowWatchLater 开，经 argument 传入）—
+#   Loon 同 URL「最后一个脚本整体覆盖、各自读原始响应」(§13b)，故 tab/v2 只能由单一脚本接管，全部并入本脚本。
+http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/resource/show/tab/v2 script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliHome.js, requires-body=1, argument={homeShowWatchLater}, tag=B站·首页顶底栏改造
 
 # — 我的页精简 —
 http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/v2/account/(?:mine|myinfo) script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliMineClean.js, requires-body=1, enable={cleanMine}, tag=B站·我的页精简
