@@ -1,0 +1,105 @@
+#!name=Bilibili 去广告+信息流净化
+#!desc=以 kokoryh/Sparkle 现行脚本为基底（解决旧 proto 过期导致播放页改写静默失效），叠加本插件独有需求并做成独立开关：①首页信息流整条清空 ②首页 tab 自定义 ③播放页相关推荐整块清空（cleanRelates）。gRPC 去广告/评论/搜索/动态/直播全覆盖。需 Loon「MitM over HTTP/2」开启。iOS 15+，Loon 3.2.4+
+#!author=@orangespiring；gRPC/JSON 去广告脚本基于 kokoryh/Sparkle[https://github.com/kokoryh/Sparkle]
+#!openUrl=https://apps.apple.com/app/id736536022
+#!tag=去广告
+#!system=iOS,iPadOS
+#!system_version=15
+#!loon_version=3.2.4(787)
+#!homepage=https://github.com/orangespiring
+#!icon=https://raw.githubusercontent.com/luestr/IconResource/main/App_icon/120px/Bilibili.png
+#!date=2026-06-13
+
+# 哔哩哔哩净化 — Loon
+# 核心 gRPC 去广告基于 kokoryh/Sparkle，本插件主要为自用，不接受功能性修改，请支持原作者：
+# https://github.com/kokoryh/Sparkle
+# 规则与脚本部分参考 fmz200/wool_scripts
+
+[Argument]
+# —— 本插件独有 ——
+cleanRelates = switch,true,tag=播放页·清空推荐 (和'加载优化'冲突),desc=连正常视频推荐一起清空（关=仅去广告、保留推荐）
+cleanHomeFeed = switch,true,tag=首页·信息流整条清空,desc=非仅去广告，data.items 整条清空（关=不接管首页）
+customTab = switch,true,tag=首页·自定义顶/底栏,desc=改 tab/v2 顶栏/底栏/右上角入口（关=不接管 tab）
+# —— 常规净化 ——
+cleanSearch = switch,true,tag=搜索页·相关性过滤,desc=视频卡须标题命中搜索词高亮才留、时长<4:00 丢弃（去广告恒开；课程/番剧/用户卡放行）
+cleanMine = switch,true,tag=我的页·精简
+cleanSplash = switch,true,tag=开屏·广告列表清空
+displayUpList = select,"show","hide","auto",tag=动态·[最常访问]显示方式
+purifyComment = switch,true,tag=评论区·过滤置顶广告
+optimizeRequest = switch,true,tag=评论区·加载优化
+sponsorBlock = switch,true,tag=播放·空降助手（跳过赞助段）
+logLevel = select,"error","warn","info","debug","off",tag=脚本日志等级
+
+# ===== 网络层（无需 MITM）=====
+[Rule]
+URL-REGEX,^http://upos-sz-static\.bilivideo\.com/ssaxcode/\w{2}/\w{2}/\w{32}-1-SPLASH,REJECT-DICT
+URL-REGEX,^http://[\d\.]+:8000/v1/resource/\w{32}-1-SPLASH,REJECT-DICT
+# cm.bilibili.com = 商业广告域名（/cm/api/fees/wise 广告调度、/cm/api/conversion 归因）；
+#   注：播放页可见的视频下广告是 protobuf 里的 cm 字段，由脚本删除，不靠这条。
+DOMAIN,cm.bilibili.com,REJECT
+
+# ===== 脚本 =====
+[Script]
+
+# — 首页信息流清空 —
+http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/v2/feed/index script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliEmptyFeed.js, requires-body=1, enable={cleanHomeFeed}, tag=B站·首页信息流清空
+
+# — 首页 tab 自定义 —
+http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/resource/show/tab/v2 script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliTabFeed.js, requires-body=1, enable={customTab}, tag=B站·首页tab自定义
+
+# — 我的页精简 —
+http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/v2/account/(?:mine|myinfo) script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliMineClean.js, requires-body=1, enable={cleanMine}, tag=B站·我的页精简
+
+# — 开屏广告列表 —
+http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/v2/splash/list script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliSplashBlock.js, requires-body=1, enable={cleanSplash}, tag=B站·开屏广告列表
+
+# — gRPC 去广告 + 播放页推荐（fork 自 Sparkle）—
+# 覆盖：DynAll / Popular / View / ViewProgress / RelatesFeed / PlayView / PlayViewUnite / SearchAll / DmView / MainList / PGC PlayView
+http-response ^https://(?:grpc\.biliapi\.net|app\.bili(?:bili\.com|api\.net))/bilibili\.(?:app\.(?:show\.v1\.Popular/Index|dynamic\.v2\.Dynamic/DynAll|view(?:unite)?\.v1\.View/(?:View|ViewProgress|RelatesFeed)|playurl\.v1\.PlayURL/PlayView|playerunite\.v1\.Player/PlayViewUnite)|polymer\.app\.search\.v1\.Search/SearchAll|community\.service\.dm\.v1\.DM/DmView|main\.community\.reply\.v1\.Reply/MainList|pgc\.gateway\.player\.v2\.PlayURL/PlayView)$ script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliProtobufResponse.js, requires-body=true, binary-body-mode=true, argument=[{displayUpList},{purifyComment},{sponsorBlock},{cleanRelates},{cleanSearch},{logLevel}], tag=B站·gRPC去广告+播放页推荐
+
+# — 请求侧（上游 Sparkle，直引）—
+
+# 空降助手
+http-request ^https://(?:grpc\.biliapi\.net|app\.bilibili\.com)/bilibili\.community\.service\.dm\.v1\.DM/DmSegMobile$ script-path=https://raw.githubusercontent.com/kokoryh/Sparkle/refs/heads/master/dist/bilibili.protobuf.request.js, argument=[{logLevel}], requires-body=true, binary-body-mode=true, timeout=10, enable={sponsorBlock}, tag=B站·空降助手
+
+# 评论区加载优化
+http-request ^https://(?:grpc\.biliapi\.net|app\.bilibili\.com)/bilibili\.(?:app\.viewunite\.v1\.View/View|main\.community\.reply\.v1\.Reply/MainList)$ script-path=https://raw.githubusercontent.com/kokoryh/Sparkle/refs/heads/master/dist/bilibili.protobuf.request.js, argument=[{purifyComment},{logLevel}], requires-body=true, binary-body-mode=true, timeout=10, enable={optimizeRequest}, tag=B站·评论区加载优化
+
+# 直播间去广告
+http-response ^https://api\.live\.bilibili\.com/xlive/(?:app-interface/v2/index/feed|app-room/v1/index/getInfoBy(?:Room|User))\? script-path=https://raw.githubusercontent.com/kokoryh/Sparkle/refs/heads/master/dist/bilibili.json.js, requires-body=true, tag=B站·直播间去广告
+
+# ===== 重写 =====
+[Rewrite]
+
+# 直播带货 / 游戏直播大卡
+^https://api\.live\.bilibili\.com/xlive/e-commerce-interface/v1/ecommerce-user/get_shopping_info\? reject-dict
+^https://line3-h5-mobile-api\.biligame\.com/game/live/large_card_material\? reject-dict
+
+# 开屏品牌 / 顶栏活动 / 会员广告 / 搜索热搜
+^https://ap[ip]\.bilibili\.com/x/(?:resource/(?:top/activity|patch/tab(?:/v2)?)|v2/search/square|vip/ads/materials)\? mock-response-body data-type=text status-code=200 data="{"code":-404,"message":"-404","ttl":1,"data":null}"
+^https://api\.bilibili\.com/pgc/activity/deliver/material/receive\? mock-response-body data-type=text status-code=200 data="{"code":0,"data":{"closeType":"close_win","container":[],"showTime":""},"message":"success"}"
+
+# gRPC mock（青少年弹窗 / 默认搜索 / TFInfo / 结束页 / 暂停页）
+^https://grpc\.biliapi\.net/bilibili\.app\.interface\.v1\.Teenagers/ModeStatus$ mock-response-body data-type=text data="AAAAABMKEQgCEgl0ZWVuYWdlcnMgAioA" mock-data-is-base64=true
+^https://grpc\.biliapi\.net/bilibili\.app\.interface\.v1\.Search/DefaultWords$ mock-response-body data-type=text data="AAAAACEaHeaQnOe0ouinhumikeOAgeeVquWJp+aIlnVw5Li7KAE=" mock-data-is-base64=true
+^https://grpc\.biliapi\.net/bilibili\.app\.(?:view\.v1\.View/TFInfo|viewunite\.v1\.View/(?:PlayPause|ViewEndPage))$ mock-response-body data-type=text data="AAAAAAA=" mock-data-is-base64=true
+^https://grpc\.biliapi\.net/bilibili\.app\.(?:interface\.v1\.(?:Teenagers/ModeStatus|Search/DefaultWords)|view\.v1\.View/TFInfo|viewunite\.v1\.View/ViewEndPage)$ response-header-add grpc-status 0
+
+# 皮肤装扮广告位
+^https://app\.bilibili\.com/x/resource/show/skin\? response-body-json-del data.common_equip
+
+# 开屏品牌/活动/曝光（脚本接管 splash/list，这里兜底其余）
+^https?://app\.bili(?:bili\.com|api\.net)/x/v2/splash/(?:brand/list|event/list2|show) reject-200
+
+# 杂项广告/追踪
+^https://(?:api\.bilibili\.com/x/mengqi/v1/resource|app\.bilibili\.com/x/resource/peak/download) reject-dict
+^https://api\.bilibili\.com/x/v2/dm/qoe/show\? reject-dict
+^https://app\.bilibili\.com/x/resource/ip reject-dict
+
+# 剥离分享链接追踪参数
+(^https://live\.bilibili\.com/\d+)(/?\?.*) 307 $1
+(^https://(?:www|m)\.bilibili\.com/video/(?:BV\w{10}|av\d{9}))(/?\?.*) 307 $1
+
+# ===== MITM =====
+[MITM]
+hostname = ap?.bilibili.com, app.biliapi.net, grpc.biliapi.net, api.live.bilibili.com, line3-h5-mobile-api.biligame.com, www.bilibili.com, m.bilibili.com, live.bilibili.com

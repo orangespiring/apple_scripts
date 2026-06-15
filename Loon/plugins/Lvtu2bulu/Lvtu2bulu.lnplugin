@@ -1,0 +1,92 @@
+#!name = 两步路户外助手净化
+#!desc = 首页+搜索+我的页净化, 广告锁空, 商城/广告SDK reject @orangespiring
+#!icon = https://raw.githubusercontent.com/luestr/IconResource/main/App_icon/120px/2bulu.png
+
+# 两步路户外助手净化 — Loon
+# 本插件主要为自用，不接受功能性修改。规则参考 fmz200/wool_scripts 与 blackmatrix7/ios_rule_script
+
+# ===== 首页 =====
+
+[Script]
+
+# 顶部图标(动态/赛事等) → appTopNavModuleInfos=[]
+http-response ^https?://helper\.2bulu\.com/app/getTopNavModuleNew script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-顶部图标
+
+# 子 tab → 只留「推荐」
+http-response ^https?://helper\.2bulu\.com/app/getNavigationBar script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-子tab
+
+# 运营模块卡片 → modules=[]
+http-response ^https?://helper\.2bulu\.com/outing/reqIndex\? script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-运营卡片
+
+# 推荐流 → 文字替换
+http-response ^https?://helper\.2bulu\.com/dynamic/recommandDynamicList script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-推荐流
+
+# 关注流 → data=[]
+http-response ^https?://helper\.2bulu\.com/feed/list script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-关注流
+
+# 本地/发现 → 注入诗词
+http-response ^https?://helper\.2bulu\.com/outing/reqFoundNewList script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-发现诗词
+
+# 入口配置 → configData="{}"
+http-response ^https?://helper\.2bulu\.com/getAppEntranceConfig script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-入口配置
+
+http-response ^https?://helper\.2bulu\.com/proSpecial/allData script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-proSpecial
+
+http-response ^https?://helper\.2bulu\.com/greenPea/queryTasks script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-greenPea
+
+# ===== 活动 =====
+
+http-response ^https?://helper\.2bulu\.com/outing/reqOutingIndex\? script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-活动模块
+
+http-response ^https?://helper\.2bulu\.com/outing/reqAroundBusiOutingBriefInfoList script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-活动列表
+
+# ===== 搜索 =====
+
+http-response ^https?://helper\.2bulu\.com/app/getSearchPromptWords script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-搜索提示词
+
+http-response ^https?://helper\.2bulu\.com/app/getRecommendWords script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-推荐词
+
+http-response ^https?://helper\.2bulu\.com/search/searchHotKeyList script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-热搜列表
+
+# ===== 我的页 =====
+
+http-response ^https?://helper\.2bulu\.com/promote/getAppUserModule script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-我的页
+
+# ===== 广告接口 =====
+
+http-response ^https?://helper\.2bulu\.com/advert/getAllAdInfo script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-广告信息
+
+http-response ^https?://helper\.2bulu\.com/advert/getAdInfo script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-广告详情
+
+# ===== 重写 =====
+
+[Rewrite]
+
+# 弹窗/开屏/活动
+^https?://helper\.2bulu\.com/getSplash reject-200
+^https?://helper\.2bulu\.com/getPopInfo reject-200
+^https?://helper\.2bulu\.com/adActivity reject-200
+^https?://helper\.2bulu\.com/appNavigateSkin reject-200
+
+# 社区 H5
+^https?://www\.2bulu\.com/community/ reject
+
+# ===== 广告/统计 SDK + 商城（连接层拒绝）=====
+
+[Rule]
+
+DOMAIN,sdk.tianmu.mobi,REJECT
+DOMAIN,ad.baihemob.com,REJECT
+DOMAIN,inner.baihemob.com,REJECT
+DOMAIN,ad.shunchangzhixing.com,REJECT
+DOMAIN,report.shunchangzhixing.com,REJECT
+DOMAIN,d.xfinfr.com,REJECT
+DOMAIN,lf-cdn-tos.bytescm.com,REJECT
+DOMAIN,msg.umengcloud.com,REJECT
+DOMAIN,apmplus.volces.com,REJECT
+DOMAIN-SUFFIX,youzan.com,REJECT
+
+# ===== MITM =====
+
+[MITM]
+hostname = helper.2bulu.com, www.2bulu.com
