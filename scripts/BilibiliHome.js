@@ -347,6 +347,15 @@ function buildFeed(items, config) {
   return JSON.stringify({ code: 0, message: "OK", ttl: 1, data });
 }
 
+// —— 原地洗牌（Fisher-Yates），用于稍后再看随机排列 ——
+function shuffle(a) {
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const t = a[i]; a[i] = a[j]; a[j] = t;
+  }
+  return a;
+}
+
 // —— 从缓存的原始 toview list 切一页并按列数构卡 ——
 // start 为绝对偏移；卡 idx = IDX_BASE - 全局序号（递减，与真实 feed 同序，作为下拉加载游标）。
 function buildPage(rawList, start, isDouble) {
@@ -428,6 +437,11 @@ function handleTab() {
   const col = parseInt(q.column, 10);
   const isDouble = (col === 2 || col === 4);
 
+  // 随机排列开关：feed/index 那条 [Script] 传 argument=[{randomWatchLater}] → $argument。
+  // 与 handleTab 同样按「具名对象 → JSON 串里找 true」解析（该行只传这一个参数，无歧义）。
+  const randomOn = /true/i.test(typeof $argument === "undefined" ? ""
+    : (typeof $argument === "object" ? JSON.stringify($argument) : String($argument)));
+
   // 刷新 vs 加载更多：靠 pull 参数判定（capture60 实测：下拉刷新 pull=1，上滑加载更多 pull=0）。
   // 不能用 App 回传的 idx 当游标——它恒为首屏顶部卡的 idx、永不前进（见文件头说明）。
   const isLoadMore = q.pull === "0";
@@ -499,7 +513,10 @@ function handleTab() {
       }
       // 缓存原始 list（构卡延迟到出页时按列数决定），首屏返回前 PAGE_SIZE 条
       const raw = j.data.list;
-      LOG("注入稍后再看 共" + raw.length + "条 col=" + col + " 首屏" + Math.min(PAGE_SIZE, raw.length) + "条 双列=" + isDouble);
+      // 随机排列（randomWatchLater 开时）：只在刷新这一刻洗一次牌并存进缓存，
+      // 之后翻页读的是同一份已洗序 → 不重复/不漏；每次下拉刷新重新进到这里 = 重洗。
+      if (randomOn) shuffle(raw);
+      LOG("注入稍后再看 共" + raw.length + "条 col=" + col + " 首屏" + Math.min(PAGE_SIZE, raw.length) + "条 双列=" + isDouble + " 随机=" + randomOn);
       try { $persistentStore.write(JSON.stringify(raw), CACHE_KEY); } catch (e) {}
       writeOffset(PAGE_SIZE); // 刷新后游标归位到第二页起点，供后续 pull=0 加载更多
       $done({ body: buildFeed(buildPage(raw, 0, isDouble), config) });
