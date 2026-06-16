@@ -45,7 +45,7 @@ http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/v2/feed/index script-p
 
 # — tab/v2 接管（恒开：右上角入口 data.top + 底栏精简 + 删「…」菜单 恒改；顶栏 tab 折叠成单「稍后再看」仅当 homeShowWatchLater 开，经 argument 传入）—
 #   Loon 同 URL「最后一个脚本整体覆盖、各自读原始响应」(§13b)，故 tab/v2 只能由单一脚本接管，全部并入本脚本。
-http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/resource/show/tab/v2 script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliHome.js, requires-body=1, argument={homeShowWatchLater}, tag=B站·首页顶底栏改造
+http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/resource/show/tab/v2 script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliHome.js, requires-body=1, argument=[{homeShowWatchLater}], tag=B站·首页顶底栏改造
 
 # — 我的页精简 —
 http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/v2/account/(?:mine|myinfo) script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliMineClean.js, requires-body=1, enable={cleanMine}, tag=B站·我的页精简

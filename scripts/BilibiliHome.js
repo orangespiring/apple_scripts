@@ -371,14 +371,17 @@ function handleTab() {
     const data = obj && obj.data;
     if (data) {
       // 顶栏 data.tab：仅当 homeShowWatchLater 开启时折叠成单「稍后再看」；关闭则保留原生 tab 不动
-      const wlOn = typeof $argument !== "undefined" && /true/i.test(String($argument));
+      // ⚠️ Loon 对 argument=[{name}] 传入的 $argument 是「具名对象」或其 JSON 串（如 {homeShowWatchLater:true}），
+      //    不是纯值 "true"。直接 String(对象)="[object Object]" 会让 /true/ 永远不匹配（反复踩的坑）→ 先 stringify。
+      const argStr = typeof $argument === "undefined" ? ""
+        : (typeof $argument === "object" ? JSON.stringify($argument) : String($argument));
+      const wlOn = /true/i.test(argStr);
       if (wlOn && Array.isArray(data.tab) && data.tab.length) {
         let kept = data.tab.filter((t) => ((t && t.uri) || "").indexOf("pegasus/promo") >= 0);
         if (!kept.length) kept = [data.tab[0]]; // 容错：没匹配到就留第一个，免得顶栏空掉被 App 回退成默认全栏
-        const tab = kept[0];
-        tab.name = "稍后再看";
-        tab.default_selected = 1;
-        data.tab = [tab];
+        kept[0].name = "稍后再看";
+        kept[0].default_selected = 1;
+        data.tab = [kept[0]]; // ⚠️ 必须是数组！赋单个对象 App 会判无效、保留原生 tab（踩过的坑）
       }
       // 右上角 data.top：保留「消息」，加 收藏夹 + 稍后再看入口（点击跳转原生页，零白屏）—— 恒改
       const msg = (Array.isArray(data.top) ? data.top : []).filter(
