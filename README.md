@@ -23,9 +23,9 @@ scripts/          # 共享脚本（.js）
 
 | App | 插件 | 部分功能 |
 |-----|------|------|
-| 哔哩哔哩 | [BilibiliFeedBlock.lnplugin](Loon/plugins/BiliBili/BilibiliFeedBlock.lnplugin) | 首页/播放页信息流清空 · 搜索页结果过滤 · tab 自定义 |
-| 两步路户外助手 | [Lvtu2bulu.lnplugin](Loon/plugins/Lvtu2bulu/Lvtu2bulu.lnplugin) | 首页/搜索/我的页净化 · 推荐流诗词替换 · 广告 SDK 拒绝 |
-| 小红书 | [XiaoHongShu.lnplugin](Loon/plugins/XiaoHongShu/XiaoHongShu.lnplugin) | 首页信息流按分类过滤 · 视频下滑阻止 · 首页视频屏蔽 · 解除复制/下载限制 |
+| 哔哩哔哩 | [BilibiliFeedBlock.lnplugin](Loon/plugins/BiliBili/BilibiliFeedBlock.lnplugin) | 去广告, 首页信息流替换为稍后再看, 搜索页过滤无搜索关键词的条目, 播放页过滤信息流, 空降助手 |
+| 两步路户外助手 | [Lvtu2bulu.lnplugin](Loon/plugins/Lvtu2bulu/Lvtu2bulu.lnplugin) | 首页/搜索/我的页净化, 推荐流诗词替换, 广告 SDK 拒绝 |
+| 小红书 | [XiaoHongShu.lnplugin](Loon/plugins/XiaoHongShu/XiaoHongShu.lnplugin) | 首页信息流过滤, 首页Tab可编辑, 同城净化, 复制下载解锁, 视频流阻止下滑 |
 
 ## 致谢
 

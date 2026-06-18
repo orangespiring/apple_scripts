@@ -1,5 +1,5 @@
 #!name=Bilibili 去广告+信息流净化
-#!desc=以 kokoryh/Sparkle 现行脚本为基底（解决旧 proto 过期导致播放页改写静默失效），叠加本插件独有需求并做成独立开关：①首页信息流整条清空 ②首页 tab 自定义 ③播放页相关推荐整块清空（cleanRelates）。gRPC 去广告/评论/搜索/动态/直播全覆盖。需 Loon「MitM over HTTP/2」开启。iOS 15+，Loon 3.2.4+
+#!desc=去广告, 首页信息流替换为稍后再看, 搜索页过滤无搜索关键词的条目, 播放页过滤信息流, 空降助手
 #!author=@orangespiring；gRPC/JSON 去广告脚本基于 kokoryh/Sparkle[https://github.com/kokoryh/Sparkle]
 #!openUrl=https://apps.apple.com/app/id736536022
 #!tag=去广告
