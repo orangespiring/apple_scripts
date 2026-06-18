@@ -35,6 +35,22 @@ const LOG = (...a) => {
   } catch (e) {}
 };
 
+// 按参数名从 $argument 取 switch 开关值。官方写法 argument=[{a},{b}] 时 $argument 是按名映射的
+// 对象（{a:true,...}），直接 $argument[name] 取值最稳；JSON 字符串兜底，避免再踩 XHSClean 那次
+// 「整段 stringify 后用 /true/ 扫全文」的坑——多个参数时会扫到别的参数，含糊不清。
+function getArgFlag(name) {
+  const raw = typeof $argument === "undefined" ? null : $argument;
+  if (raw == null) return false;
+  let val = raw;
+  if (typeof raw === "object") {
+    val = raw[name];
+  } else {
+    try { const parsed = JSON.parse(raw); val = parsed && typeof parsed === "object" ? parsed[name] : raw; }
+    catch (e) { /* 非 JSON：单值字符串，原样比较 */ }
+  }
+  return val === true || val === "true";
+}
+
 // —— 紧凑 md5（Joseph Myers 实现，UTF-8 安全）——
 function md5(str) {
   function rl(n, c) { return (n << c) | (n >>> (32 - c)); }
@@ -380,11 +396,7 @@ function handleTab() {
     const data = obj && obj.data;
     if (data) {
       // 顶栏 data.tab：仅当 homeShowWatchLater 开启时折叠成单「稍后再看」；关闭则保留原生 tab 不动
-      // ⚠️ Loon 对 argument=[{name}] 传入的 $argument 是「具名对象」或其 JSON 串（如 {homeShowWatchLater:true}），
-      //    不是纯值 "true"。直接 String(对象)="[object Object]" 会让 /true/ 永远不匹配（反复踩的坑）→ 先 stringify。
-      const argStr = typeof $argument === "undefined" ? ""
-        : (typeof $argument === "object" ? JSON.stringify($argument) : String($argument));
-      const wlOn = /true/i.test(argStr);
+      const wlOn = getArgFlag("homeShowWatchLater");
       if (wlOn && Array.isArray(data.tab) && data.tab.length) {
         let kept = data.tab.filter((t) => ((t && t.uri) || "").indexOf("pegasus/promo") >= 0);
         if (!kept.length) kept = [data.tab[0]]; // 容错：没匹配到就留第一个，免得顶栏空掉被 App 回退成默认全栏
@@ -438,9 +450,7 @@ function handleTab() {
   const isDouble = (col === 2 || col === 4);
 
   // 随机排列开关：feed/index 那条 [Script] 传 argument=[{randomWatchLater}] → $argument。
-  // 与 handleTab 同样按「具名对象 → JSON 串里找 true」解析（该行只传这一个参数，无歧义）。
-  const randomOn = /true/i.test(typeof $argument === "undefined" ? ""
-    : (typeof $argument === "object" ? JSON.stringify($argument) : String($argument)));
+  const randomOn = getArgFlag("randomWatchLater");
 
   // 刷新 vs 加载更多：靠 pull 参数判定（capture60 实测：下拉刷新 pull=1，上滑加载更多 pull=0）。
   // 不能用 App 回传的 idx 当游标——它恒为首屏顶部卡的 idx、永不前进（见文件头说明）。
