@@ -1,12 +1,12 @@
 #!name=Bilibili 去广告+信息流净化
-#!desc=去广告, 首页信息流替换为稍后再看, 搜索页过滤无搜索关键词的条目, 播放页过滤信息流, 空降助手
+#!desc=去广告, 首页信息流替换为稍后再看, 搜索页按标题/UP名/热评做相关性过滤, 播放页过滤信息流, 空降助手
 #!author=@orangespiring；gRPC/JSON 去广告脚本基于 kokoryh/Sparkle[https://github.com/kokoryh/Sparkle]
 #!openUrl=https://apps.apple.com/app/id736536022
 #!tag=去广告
 #!loon_version=3.2.4(787)
 #!homepage=https://github.com/orangespiring
 #!icon=https://raw.githubusercontent.com/luestr/IconResource/main/App_icon/120px/Bilibili.png
-#!date=2026-06-13
+#!date=2026-08-05
 
 # 哔哩哔哩净化 — Loon
 # 核心 gRPC 去广告基于 kokoryh/Sparkle，本插件主要为自用，不接受功能性修改，请支持原作者：
@@ -19,7 +19,8 @@ cleanRelates = switch,true,tag=播放页·清空推荐 (和'加载优化'冲突)
 homeShowWatchLater = switch,true,tag=首页·信息流改稍后再看,desc=只控制 feed/index：首页推荐换成「稍后再看」列表（需登录）。顶栏/底栏改造恒开、不受此开关影响
 randomWatchLater = switch,true,tag=首页·稍后再看随机排列,desc=每次下拉刷新把稍后再看列表重新随机洗牌（关=按 B 站默认顺序）。仅本地展示顺序，不改服务器列表
 # —— 常规净化 ——
-cleanSearch = switch,true,tag=搜索页·相关性过滤,desc=视频卡须标题命中搜索词高亮才留、时长<4:00 丢弃（去广告恒开；课程/番剧/用户卡放行）
+cleanSearch = switch,true,tag=搜索页·相关性过滤,desc=视频卡须标题/UP名/热评命中搜索词才留（去广告恒开；课程/番剧/用户卡放行）
+searchMinDur = input,"0",tag=搜索页·过滤<n秒的视频,desc=填秒数，短于它的视频卡丢弃；0 或留空=不按时长丢（默认）。也认 "1:30" 这种写法，前后空格/换行会自动去掉
 cleanMine = switch,true,tag=我的页·精简
 cleanSplash = switch,true,tag=开屏·广告列表清空
 displayUpList = select,"show","hide","auto",tag=动态·[最常访问]显示方式
@@ -54,7 +55,7 @@ http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/v2/splash/list script-
 
 # — gRPC 去广告 + 播放页推荐（fork 自 Sparkle）—
 # 覆盖：DynAll / Popular / View / ViewProgress / RelatesFeed / PlayView / PlayViewUnite / SearchAll / DmView / MainList / PGC PlayView
-http-response ^https://(?:grpc\.biliapi\.net|app\.bili(?:bili\.com|api\.net))/bilibili\.(?:app\.(?:show\.v1\.Popular/Index|dynamic\.v2\.Dynamic/DynAll|view(?:unite)?\.v1\.View/(?:View|ViewProgress|RelatesFeed)|playurl\.v1\.PlayURL/PlayView|playerunite\.v1\.Player/PlayViewUnite)|polymer\.app\.search\.v1\.Search/SearchAll|community\.service\.dm\.v1\.DM/DmView|main\.community\.reply\.v1\.Reply/MainList|pgc\.gateway\.player\.v2\.PlayURL/PlayView)$ script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliProtobufResponse.js, requires-body=true, binary-body-mode=true, argument=[{displayUpList},{purifyComment},{sponsorBlock},{cleanRelates},{cleanSearch},{logLevel}], tag=B站·gRPC去广告+播放页推荐
+http-response ^https://(?:grpc\.biliapi\.net|app\.bili(?:bili\.com|api\.net))/bilibili\.(?:app\.(?:show\.v1\.Popular/Index|dynamic\.v2\.Dynamic/DynAll|view(?:unite)?\.v1\.View/(?:View|ViewProgress|RelatesFeed)|playurl\.v1\.PlayURL/PlayView|playerunite\.v1\.Player/PlayViewUnite)|polymer\.app\.search\.v1\.Search/SearchAll|community\.service\.dm\.v1\.DM/DmView|main\.community\.reply\.v1\.Reply/MainList|pgc\.gateway\.player\.v2\.PlayURL/PlayView)$ script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliProtobufResponse.js, requires-body=true, binary-body-mode=true, argument=[{displayUpList},{purifyComment},{sponsorBlock},{cleanRelates},{cleanSearch},{searchMinDur},{logLevel}], tag=B站·gRPC去广告+播放页推荐
 
 # — 请求侧（上游 Sparkle，直引）—
 
