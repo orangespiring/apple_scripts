@@ -3,8 +3,6 @@
 #!author=@orangespiring；gRPC/JSON 去广告脚本基于 kokoryh/Sparkle[https://github.com/kokoryh/Sparkle]
 #!openUrl=https://apps.apple.com/app/id736536022
 #!tag=去广告
-#!system=iOS,iPadOS
-#!system_version=15
 #!loon_version=3.2.4(787)
 #!homepage=https://github.com/orangespiring
 #!icon=https://raw.githubusercontent.com/luestr/IconResource/main/App_icon/120px/Bilibili.png

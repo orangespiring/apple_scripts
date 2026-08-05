@@ -54,6 +54,59 @@ function parseSwitch(name, defaultValue) {
 // 现由 Loon [Argument] switch 参数 filterVideo 注入（默认开）。
 var FILTER_VIDEO = parseSwitch('filterVideo', true);
 
+// 【首页「热点」/「直播」卡片】四值，由 Loon [Argument] select 参数 blockFeedCards 注入
+// （默认「热点和直播都关」）：热点和直播都关 / 只关直播 / 只关热点 / 都不关。
+// 这两种是混在信息流里的非笔记卡片，跟 type==='video'（视频笔记）是两回事，各管各的。
+//
+//   直播卡片：⭐抓包实证（127_1785938280570）—— `type:"live"` + `model_type:"live_v2"`，
+//             整条只有 {cursor_score,dislike_optional,is_ads,is_tracking,live,model_type,
+//             recommend,track_id_mix_rank,type}，没有 id/display_title，是纯卡片不是笔记。
+//   热点卡片：⚠️**未经抓包实证** —— 现有四份抓包里一次都没出现过热点卡片，
+//             判据是照着直播卡的命名规律猜的（type/model_type 里含 hot/trend）。
+//             如果实测没生效，去 Loon 日志里找下面 logUnknownCard() 打出的
+//             「[XHS] 未识别卡片」行，把 type/model_type 告诉我，改成精确匹配。
+var CARD_BLOCK = parseFeedCardMode();
+var BLOCK_LIVE_CARD = CARD_BLOCK.live;
+var BLOCK_HOT_CARD = CARD_BLOCK.hot;
+
+// 按关键词判断而不是整串比对，这样 [Argument] 里的选项文案怎么改都不会打断解析。
+// 现行标签：热点和直播 / 直播 / 热点 / 都不过滤
+// 旧标签  ：热点和直播都关 / 只关直播 / 只关热点 / 都不关   ← 同一套逻辑也能认
+function parseFeedCardMode() {
+  var raw = getArgRaw('blockFeedCards');
+  if (raw == null) return { live: true, hot: true };           // 未接入参数 → 都关
+  var s = String(raw).trim().replace(/^["'\[]+|["'\]]+$/g, '');
+  if (s === '') return { live: true, hot: true };
+  // 「都不过滤」/「都不关」：必须先判——这两个串里也含「直播」以外的字，但都带「都不」
+  if (s.indexOf('都不') !== -1) return { live: false, hot: false };
+  var hot = s.indexOf('热点') !== -1;
+  var live = s.indexOf('直播') !== -1;
+  if (!hot && !live) return { live: true, hot: true };         // 认不出的值 → 都关，别静默放行
+  return { live: live, hot: hot };
+}
+
+// 直播卡片判据（实证）：type==='live'，或 model_type 以 live 开头（live_v2 之类的版本后缀）。
+function isLiveCard(item) {
+  if (!item) return false;
+  if (item.type === 'live') return true;
+  return /^live/i.test(String(item.model_type || ''));
+}
+
+// 热点卡片判据（⚠️ 猜测，未实证）：type/model_type 里出现 hot 或 trend。
+function isHotCard(item) {
+  if (!item) return false;
+  return /hot|trend/i.test(String(item.type || '') + '|' + String(item.model_type || ''));
+}
+
+// 诊断：把非笔记类卡片的 type/model_type 打到 Loon 日志，用来抓「热点」卡的真实签名。
+// 正常笔记是 model_type==='note'，刷一屏只会打出寥寥几行，不会刷屏。
+function logUnknownCard(item) {
+  if (!item || item.model_type === 'note') return;
+  if (isLiveCard(item) || isHotCard(item)) return;             // 已经认识的不用打
+  console.log('[XHS] 未识别卡片 type=' + item.type + ' model_type=' + item.model_type
+    + ' keys=' + Object.keys(item).join(','));
+}
+
 // 【每日浏览上限】按「过滤后」（已删视频/黑名单分类）条数计数，跨天（设备本地日期变化）自动清零。
 // 现由 Loon 插件设置「每日浏览上限」(input 参数 dailyLimit) 注入；<=0 或留空 = 不限。
 // 未接入参数（非 Loon，或 [Script] 行没写 argument=）→ 回退 DEFAULT_DAILY_LIMIT。
@@ -70,9 +123,32 @@ function parseDailyLimit() {
   return (isNaN(n) || n < 0) ? DEFAULT_DAILY_LIMIT : n; // 0 = 不限
 }
 
-// 【标题前注入分类名】true = 卡片标题前加「[分类] 」，方便一眼看出每条属于哪类
-// 现由 Loon [Argument] switch 参数 showCategoryInTitle 注入（默认开）。
-var SHOW_CATEGORY_IN_TITLE = parseSwitch('showCategoryInTitle', true);
+// 【首页分类：注入标题 / 按分类过滤】三值，由 Loon [Argument] select 参数
+// showCategoryInTitle 注入（默认「注入并过滤」）：
+//   注入并过滤 → 标题前加「[分类] 」 + 删掉 BLOCK_CATEGORIES 里的帖子
+//   只注入     → 只加「[分类] 」前缀，不按分类删帖（想先看看各分类都是啥时用）
+//   不注入     → 两样都不做（分类相关行为全关）
+// ⚠️ 只管「分类」这一路：FILTER_VIDEO（过滤视频卡片）和 DAILY_LIMIT（日浏览上限）
+//    是独立开关，不受这里影响。
+// 兼容老配置：拿到布尔 true → 注入并过滤；false → 不注入（老版里 false 只关注入、
+//    过滤照旧，但新三值没有「只过滤」这档，就近映射到 off 并在此注明）。
+var CATEGORY_MODE = parseCategoryMode();                       // 'inject+filter' | 'inject' | 'off'
+var SHOW_CATEGORY_IN_TITLE = (CATEGORY_MODE !== 'off');
+var FILTER_BY_CATEGORY = (CATEGORY_MODE === 'inject+filter');
+
+function parseCategoryMode() {
+  var raw = getArgRaw('showCategoryInTitle');
+  if (raw == null) return 'inject+filter';                     // 未接入参数 → 老的默认行为
+  if (typeof raw === 'boolean') return raw ? 'inject+filter' : 'off';
+  var s = String(raw).trim().replace(/^["'\[]+|["'\]]+$/g, '');
+  if (s === '') return 'inject+filter';
+  if (s === 'true' || s === '1') return 'inject+filter';
+  if (s === 'false' || s === '0') return 'off';
+  if (s.indexOf('不注入') !== -1) return 'off';
+  if (s.indexOf('过滤') !== -1) return 'inject+filter';        // 「注入并过滤」
+  if (s.indexOf('注入') !== -1) return 'inject';               // 「只注入」
+  return 'inject+filter';                                      // 认不出的值 → 回落默认，别静默关功能
+}
 // 注入后标题总长上限（含前缀，按字符计）。超出则截断原标题尾部补「…」。
 // 前缀永远在最前，必然可见；上限只为防个别超长标题触发异常/破版。
 var MAX_TITLE_LEN = 40;
@@ -92,7 +168,17 @@ var UNLOCK_SAVE_COPY = true;
 // 那条（note_id 对应项），删掉后面推荐的「下一个视频」→ 上滑无内容可加载。
 // 现由 Loon [Argument] switch 参数 blockVideoScroll 注入（默认开）。
 var BLOCK_VIDEO_SCROLL = parseSwitch('blockVideoScroll', true);
-
+// ⚠️⚠️ 「下滑出一张空白视频页」是本功能【已知且接受】的表现，不要再去修它。
+//   129_1785939424185（关掉本功能的对照抓包）证明：翻页由 cursor_score 驱动，服务器无限
+//   往下发，has_no_more/final_feed_item 全程 false —— 这个播放器在服务端语义里根本没有
+//   「到底」这个状态，坑位是 App 单方面建的，跟响应内容无关。
+//   以下四种写法**全部真机实测失败**，别再重走：
+//     ① has_no_more/final_feed_item 翻 true  → 拦不住，App 照发翻页请求
+//     ② data:[]（success:true）              → 空白页
+//     ③ {code:-1,success:false}              → 空白页
+//     ④ data:null                            → 空白页
+//     ⑤ 缓存当前条、翻页时原样重放            → 也失败（已回退，代码已删）
+//   结论：网络层改不掉，接受空白页作为「划不动了」的表现。
 // 【首页顶部固定 tab 改可编辑】homefeed/categories 里 fixed:true 的 tab（实测 RED/直播/短剧）
 // 原生不可长按删除/排序。true = 统一把 fixed 改成 false，跟其它分类 tab 一样可编辑，
 // 用户自己在 App 里长按移除/排序；按 fixed 字段通用判断，以后新增的固定 tab 也会被一并放开。
@@ -156,7 +242,11 @@ function filterFeed() {
     var body = JSON.parse($response.body);
     if (body && Array.isArray(body.data)) {
       var filtered = body.data.filter(function (item) {
+        logUnknownCard(item);                                  // 诊断用，见其定义处
+        if (BLOCK_LIVE_CARD && isLiveCard(item)) return false;
+        if (BLOCK_HOT_CARD && isHotCard(item)) return false;
         if (FILTER_VIDEO && item.type === 'video') return false;
+        if (!FILTER_BY_CATEGORY) return true;                  // 「只注入」/「不注入」两档不按分类删帖
         var cat = item.recommend && item.recommend.category_name;
         if (cat && BLOCK_CATEGORIES.indexOf(cat) !== -1) return false;
         return true;
@@ -275,20 +365,33 @@ function cleanNoteDetail() {
 
     var isVideoFeed = /\/videofeed(\?|$)/.test(url);
 
-    // 阻止下滑到下一个视频。videofeed 实测是「一次返一条」：
-    //   - 你点开的视频 → 该次响应 data[0].id === 请求的 note_id；
-    //   - App 为「下一个/预取」发的请求 note_id 仍是你点的，但响应返回的是别的 id。
-    // 所以判据 = 响应里这条 id 是否等于请求 note_id：等于=你点的，保留；不等=下一个，清空。
-    // 清空(data:[]) 让 App 没有下一条可加载 → 划不动。
+    // 阻止下滑到下一个视频。⭐126_1785934806867 抓包修正机制（此前记的「一次返一条」已过时）：
+    // videofeed 一次返 **3 条** —— data[0]=你点开的那条，data[1]/[2]=推荐的「下两条」。
+    // 每条上带这几个判据字段：
+    //   source_note: true   ← ⭐只有「你点开的那条」是 true，推荐项全 false（比 id===note_id 更稳，
+    //                          翻页请求里也照样有效，不依赖 URL 参数）
+    //   has_no_more / final_feed_item: 到底标记（原始响应恒 false）
+    //   cursor_score: 翻页游标（你点的那条为空串，推荐项带值）
+    // 只 filter 掉推荐项是不够的：App 见 has_no_more=false 仍会预留「下一页」坑位并去请求下一批，
+    // 那批被清空成 data:[] → 坑位填不上 = 下滑出一个空白视频页（用户实测症状）。
+    // 所以保留当前条的同时必须把「到底了」标记打上，让 App 根本不预留坑位、也不再发翻页请求。
     if (isVideoFeed && BLOCK_VIDEO_SCROLL) {
       var noteId = getQueryParam(url, 'note_id');
-      if (noteId) {
-        var isCurrent = body.data.some(function (it) { return it && it.id === noteId; });
-        if (isCurrent) {
-          body.data = body.data.filter(function (it) { return it && it.id === noteId; });
-        } else {
-          body.data = []; // 这是「下一个视频」的请求，直接清空
-        }
+      var hasSourceFlag = body.data.some(function (it) {
+        return it && typeof it.source_note === 'boolean';
+      });
+      // 两个判据一个都没有（字段又改名了 / URL 没带 note_id）→ 整批放行不动，
+      // 宁可这次没拦住，也不能把 data 误清空导致视频页整个打不开。
+      if (hasSourceFlag || noteId) {
+        var kept = body.data.filter(function (it) {
+          if (!it) return false;
+          if (typeof it.source_note === 'boolean') return it.source_note === true; // 新版判据
+          return it.id === noteId;                                                 // 老版兜底
+        });
+        // 整批都是推荐项、没有「你点开的那条」= App 在翻下一页要新视频 → 清空。
+        // ⚠️ 下滑会出现一张空白视频页，这是**已知且接受**的表现，别再去"修"它，见 BLOCK_VIDEO_SCROLL 注释。
+        body.data = kept;
+        markFeedEnd(kept);
       }
     }
 
@@ -306,6 +409,22 @@ function cleanNoteDetail() {
   } catch (e) {
     $done({});
   }
+}
+
+// 给保留下来的最后一条打「feed 到此为止」标记。
+// ⚠️ **实测无效，纯属无害兜底**：127_1785938280570 就是在本函数生效的状态下抓的，
+//    page=1 响应里这两个字段已经是 true，App 照样发了 page=2、照样出空白页。
+//    留着只为万一别的入口（explore_feed 以外的 source）认这个字段。
+//    别因为看到它就以为「阻止下滑」是靠它实现的——真正起作用的是上面的 filter。
+//   has_no_more / final_feed_item：原始响应里恒 false，翻 true 即声明没有下一条。
+//   cursor_score 不动：「你点开的那条」本来就是空串，清了等于没清。
+// 只标最后一条：万一以后要放行多条（比如保留 N 条），前面几条不该被当成结尾。
+function markFeedEnd(items) {
+  if (!items || !items.length) return;
+  var last = items[items.length - 1];
+  if (!last || typeof last !== 'object') return;
+  last.has_no_more = true;
+  last.final_feed_item = true;
 }
 
 // 解除单条 note 的下载/复制限制。
