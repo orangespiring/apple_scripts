@@ -1,12 +1,12 @@
 #!name=Bilibili 去广告+信息流净化
-#!desc=去广告, 首页信息流替换为稍后再看, 搜索页按标题/UP名/热评做相关性过滤, 播放页过滤信息流, 空降助手
+#!desc=去广告, 首页信息流五档可选（改稍后再看/每天1次推送/空白/原生）, 搜索页按标题/UP名/热评做相关性过滤, 播放页过滤信息流, 空降助手
 #!author=@orangespiring；gRPC/JSON 去广告脚本基于 kokoryh/Sparkle[https://github.com/kokoryh/Sparkle]
 #!openUrl=https://apps.apple.com/app/id736536022
 #!tag=去广告
 #!loon_version=3.2.4(787)
 #!homepage=https://github.com/orangespiring
 #!icon=https://raw.githubusercontent.com/luestr/IconResource/main/App_icon/120px/Bilibili.png
-#!date=2026-08-05
+#!date=2026-08-15
 
 # 哔哩哔哩净化 — Loon
 # 核心 gRPC 去广告基于 kokoryh/Sparkle，本插件主要为自用，不接受功能性修改，请支持原作者：
@@ -16,8 +16,7 @@
 [Argument]
 # —— 本插件独有 ——
 cleanRelates = switch,true,tag=播放页·清空推荐 (和'加载优化'冲突),desc=连正常视频推荐一起清空（关=仅去广告、保留推荐）
-homeShowWatchLater = switch,true,tag=首页·信息流改稍后再看,desc=只控制 feed/index：首页推荐换成「稍后再看」列表（需登录）。顶栏/底栏改造恒开、不受此开关影响
-randomWatchLater = switch,true,tag=首页·稍后再看随机排列,desc=每次下拉刷新把稍后再看列表重新随机洗牌（关=按 B 站默认顺序）。仅本地展示顺序，不改服务器列表
+homeShow = select,"改稍后再看（随机）","改稍后再看","每天1次推送","空白界面","关",tag=首页·信息流模式,desc=只控制 feed/index 的内容 —— 改稍后再看（随机）：首页换成「稍后再看」列表（需登录）并在每次下拉刷新时重新洗牌；改稍后再看：同上但按 B 站默认顺序；每天1次推送：当天第一次请求放行 B 站原生推荐（就这一屏），之后杀后台重开还能看到同一屏、但下拉刷新与上滑加载都不再给新内容，次日自动重置；空白界面：首页信息流恒空；关：完全不改、原生推荐流。顶栏 tab 名随模式变（改稍后再看两档=「稍后再看」／每天1次推送与空白界面=「首页」／关=保留原生 tab）；右上角入口与底栏精简恒开、不受影响
 # —— 常规净化 ——
 cleanSearch = switch,true,tag=搜索页·相关性过滤,desc=视频卡须标题/UP名/热评命中搜索词才留（去广告恒开；课程/番剧/用户卡放行）
 searchMinDur = input,"0",tag=搜索页·过滤<n秒的视频,desc=填秒数，短于它的视频卡丢弃；0 或留空=不按时长丢（默认）。也认 "1:30" 这种写法，前后空格/换行会自动去掉
@@ -40,12 +39,14 @@ DOMAIN,cm.bilibili.com,REJECT
 # ===== 脚本 =====
 [Script]
 
-# — 首页改显示稍后再看（feed/index → 稍后再看列表）—
-http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/v2/feed/index script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliHome.js, requires-body=1, enable={homeShowWatchLater}, argument=[{randomWatchLater}], tag=B站·首页改显示稍后再看
+# — 首页信息流模式（feed/index → 改稍后再看/每天1次推送/空白/原生，见 homeShow）—
+#   ⚠️ 恒开、不能用 enable={homeShow} 门控：enable= 只认 true/false，select 给的是中文档名
+#      → 每一档都会被判成 false、脚本永不执行。「关」这一档由脚本内部原样放行。
+http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/v2/feed/index script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliHome.js, requires-body=1, argument=[{homeShow}], tag=B站·首页信息流模式
 
-# — tab/v2 接管（恒开：右上角入口 data.top + 底栏精简 + 删「…」菜单 恒改；顶栏 tab 折叠成单「稍后再看」仅当 homeShowWatchLater 开，经 argument 传入）—
+# — tab/v2 接管（恒开：右上角入口 data.top + 底栏精简 + 删「…」菜单 恒改；顶栏 tab 是否折叠、折叠后叫什么名随 homeShow 模式，经 argument 传入）—
 #   Loon 同 URL「最后一个脚本整体覆盖、各自读原始响应」(§13b)，故 tab/v2 只能由单一脚本接管，全部并入本脚本。
-http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/resource/show/tab/v2 script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliHome.js, requires-body=1, argument=[{homeShowWatchLater}], tag=B站·首页顶底栏改造
+http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/resource/show/tab/v2 script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliHome.js, requires-body=1, argument=[{homeShow}], tag=B站·首页顶底栏改造
 
 # — 我的页精简 —
 http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/v2/account/(?:mine|myinfo) script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliMineClean.js, requires-body=1, enable={cleanMine}, tag=B站·我的页精简

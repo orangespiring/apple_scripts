@@ -1,10 +1,23 @@
 /*
  * Bilibili 首页改造脚本 (Loon http-response)
  *
- * 目的：把整个首页打造成纯「稍后再看」页（同一脚本按 URL 分流处理两个接口）。
- *   - 拦 /x/resource/show/tab/v2（唯一处理者）：顶栏只留一个 tab、改名「稍后再看」；
+ * 目的：接管首页（同一脚本按 URL 分流处理两个接口）。
+ *   - 拦 /x/resource/show/tab/v2（唯一处理者）：顶栏折叠成单 tab（名字随模式）；
  *     右上角加 收藏夹/稍后再看 入口；底栏只留 首页/动态/我的；删「…」更多菜单。
- *   - 拦 app.bilibili.com/x/v2/feed/index（明文 JSON，identity）：把 data.items 换成「稍后再看」列表。
+ *   - 拦 app.bilibili.com/x/v2/feed/index（明文 JSON，identity）：按模式改写 data.items。
+ *
+ * 【信息流模式】= Loon [Argument] 的 select 参数 homeShow（五档，经 argument= 传入；旧名 homeShowWatchLater 仍兜底认）：
+ *   改稍后再看（随机）→ 换成「稍后再看」列表，每次下拉刷新重新洗牌（默认，= 旧版两个开关w都开）
+ *   改稍后再看        → 换成「稍后再看」列表，按 B 站默认顺序
+ *   每天1次推送       → 一天只投放一屏原生推荐：当天第一次请求放行并存下这一屏，之后**只在冷启动
+ *                       （open_event=cold）那一帧回放**它，会话内的刷新/加载更多一律给空
+ *                       → 一天只有一屏内容、不增不减，跨天（设备本地日期变化）自动重置
+ *   空白界面          → data.items 恒空
+ *   关                → 完全不改 feed/index（原生推荐流）
+ *   顶栏 tab 名随模式：稍后再看两档 =「稍后再看」；每天1次推送/空白界面 =「首页」（内容不是稍后再看，
+ *   叫「稍后再看」名实不符）；关 = 不折叠、保留原生 tab。右上角入口/底栏精简/删「…」菜单 恒改。
+ *
+ * 【「稍后再看」两档的实现】
  *   - 脚本内用 $httpClient.get 反查 /x/v2/history/toview/v2/list（需签名）
  *   - 把 toview 的 data.list[] 逐条转成 feed 卡片（单列 large_cover_single_v9 / 双列 small_cover_v2，按请求 column 切换）
  *   - 失败时回退到上次缓存（$persistentStore），无缓存则返回空壳（空 items）
@@ -19,6 +32,7 @@ const APPKEY = "27eb53fc9058f8c3";
 const APPSEC = "c2ed53a74eeefe3cf99fbd01d8c9c375";
 const CACHE_KEY = "bili_home_watchlater_raw"; // 缓存 toview 原始 list（按列数即时构卡，支持单/双列切换）
 const OFFSET_KEY = "bili_home_watchlater_off"; // 分页游标：下一页起始偏移（脚本自己维护，见下）
+const DAILY_KEY = "bili_home_daily_feed"; // 「每天1次推送」档：{date,dbl,items} —— 今天投放的那一屏原生推荐
 const PAGE_SIZE = 20; // 每页显示条数（首屏 + 每次下拉加载）
 // ⚠️ 分页游标必须脚本自维护，不能依赖 App 回传的 idx（capture60 实测）：
 //    App 下拉加载（pull=0）回传的 idx = 它手里所有卡的「最大 idx」，而首屏顶部那张卡 idx 恒定最大
@@ -35,20 +49,42 @@ const LOG = (...a) => {
   } catch (e) {}
 };
 
-// 按参数名从 $argument 取 switch 开关值。官方写法 argument=[{a},{b}] 时 $argument 是按名映射的
-// 对象（{a:true,...}），直接 $argument[name] 取值最稳；JSON 字符串兜底，避免再踩 XHSClean 那次
+// 按参数名从 $argument 取原始值。官方写法 argument=[{a},{b}] 时 $argument 是按名映射的
+// 对象（{a:"x",...}），直接 $argument[name] 取值最稳；JSON 字符串兜底，避免再踩 XHSClean 那次
 // 「整段 stringify 后用 /true/ 扫全文」的坑——多个参数时会扫到别的参数，含糊不清。
-function getArgFlag(name) {
+function getArgRaw(name) {
   const raw = typeof $argument === "undefined" ? null : $argument;
-  if (raw == null) return false;
-  let val = raw;
-  if (typeof raw === "object") {
-    val = raw[name];
-  } else {
-    try { const parsed = JSON.parse(raw); val = parsed && typeof parsed === "object" ? parsed[name] : raw; }
-    catch (e) { /* 非 JSON：单值字符串，原样比较 */ }
-  }
-  return val === true || val === "true";
+  if (raw == null) return null;
+  if (typeof raw === "object") return raw[name];
+  try { const parsed = JSON.parse(raw); return parsed && typeof parsed === "object" ? parsed[name] : raw; }
+  catch (e) { return raw; } // 非 JSON：单值字符串，原样返回
+}
+
+// —— 信息流模式（[Argument] select 参数 homeShow）——
+const MODE_LATER_RANDOM = "later_random"; // 稍后再看（随机）
+const MODE_LATER = "later";               // 稍后再看
+const MODE_DAILY = "daily";               // 每天1次推送
+const MODE_BLANK = "blank";               // 空白界面
+const MODE_OFF = "off";                   // 关
+
+// 按关键词判断而不是整串比对（同 XHSClean 的做法）：[Argument] 里的选项文案怎么改都不会打断解析。
+// 认不出的值一律回落默认档，别静默把功能关掉。
+function parseHomeMode() {
+  // 参数名 2026-08-15 由 homeShowWatchLater 改成 homeShow；旧名留作兜底——插件与脚本分别住在
+  // gist / 公开仓库，更新必有先后，读不到就静默回落默认档（跟"脚本没跑"一个症状），很难查。
+  let raw = getArgRaw("homeShow");
+  if (raw == null) raw = getArgRaw("homeShowWatchLater");
+  if (raw == null) return MODE_LATER_RANDOM;                       // 未接入参数 → 默认档
+  if (typeof raw === "boolean") return raw ? MODE_LATER_RANDOM : MODE_OFF; // 兼容旧 switch 配置
+  const s = String(raw).trim().replace(/^["'\[]+|["'\]]+$/g, "");
+  if (s === "" || s === "true" || s === "1") return MODE_LATER_RANDOM;
+  if (s === "false" || s === "0") return MODE_OFF;
+  if (s.indexOf("随机") !== -1) return MODE_LATER_RANDOM;          // ⚠️ 必须先判：「稍后再看（随机）」也含「稍后」
+  if (s.indexOf("稍后") !== -1) return MODE_LATER;
+  if (s.indexOf("每天") !== -1 || s.indexOf("1次") !== -1 || s.indexOf("一次") !== -1) return MODE_DAILY;
+  if (s.indexOf("空白") !== -1) return MODE_BLANK;
+  if (s.indexOf("关") !== -1) return MODE_OFF;
+  return MODE_LATER_RANDOM;
 }
 
 // —— 紧凑 md5（Joseph Myers 实现，UTF-8 安全）——
@@ -378,29 +414,36 @@ function buildPage(rawList, start, isDouble) {
   return rawList.slice(start, start + PAGE_SIZE).map((it, i) => toCard(it, IDX_BASE - (start + i), isDouble));
 }
 
-// —— tab/v2：右上角入口/底栏恒改；顶栏 tab 折叠成单「稍后再看」仅在 homeShowWatchLater 开启时 ——
+// —— tab/v2：右上角入口/底栏恒改；顶栏 tab 是否折叠、折叠后叫什么名，随 homeShowWatchLater 模式 ——
 // ⚠️ 本脚本是 tab/v2 的【唯一】处理者：Loon 同 URL「最后一个脚本整体覆盖、各自读原始响应」(§13b)，
 //    多脚本各改一部分会互相吞掉 → 故把 data.top 入口 + data.bottom 精简 + 删 top_more（恒改）
-//    与 data.tab 折叠（受开关）全收进本函数一次性产出（原 BilibiliTabFeed.js 已删除，逻辑并入此处）。
-//    开关状态经 [Script] 的 argument={homeShowWatchLater} 传入 → $argument（"true"/"false"）。
-//    data.tab 受开关：关 = 不动原生 tab（feed 也回原生推荐，名实相符）；开 = 只留单「稍后再看」tab。
+//    与 data.tab 折叠（受模式）全收进本函数一次性产出（原 BilibiliTabFeed.js 已删除，逻辑并入此处）。
+//    模式经 [Script] 的 argument={homeShowWatchLater} 传入 → $argument。
+//    data.tab：关 = 不动原生 tab（feed 也回原生推荐，名实相符）；其余四档 = 只留单 tab、名字见 TAB_NAME_BY_MODE。
 const TAB_FAV_URI = "bilibili://main/favorite";             // 收藏夹（原生页 deeplink）
 const TAB_LATER_URI = "bilibili://user_center/watch_later"; // 稍后再看（原生页 deeplink）
 const TAB_ICON_FAV = "http://i0.hdslb.com/bfs/archive/d79b19d983067a1b91614e830a7100c05204a821.png";
 const TAB_ICON_LATER = "http://i0.hdslb.com/bfs/archive/63bb768caa02a68cb566a838f6f2415f0d1d02d6.png";
 const TAB_BOTTOM_KEEP = ["main/home", "following/home", "user_center"]; // 底栏只留 首页/动态/我的
+// 折叠后的单 tab 叫什么（MODE_OFF 不在表里 = 不折叠）
+const TAB_NAME_BY_MODE = {
+  [MODE_LATER_RANDOM]: "稍后再看",
+  [MODE_LATER]: "稍后再看",
+  [MODE_DAILY]: "首页", // 内容是原生推荐（当天只投放一屏），不叫「稍后再看」
+  [MODE_BLANK]: "首页", // 内容为空，同上
+};
 function handleTab() {
   let body = $response.body;
   try {
     const obj = JSON.parse(body);
     const data = obj && obj.data;
     if (data) {
-      // 顶栏 data.tab：仅当 homeShowWatchLater 开启时折叠成单「稍后再看」；关闭则保留原生 tab 不动
-      const wlOn = getArgFlag("homeShowWatchLater");
-      if (wlOn && Array.isArray(data.tab) && data.tab.length) {
+      // 顶栏 data.tab：除「关」外都折叠成单 tab（名字随模式）；「关」保留原生 tab 不动
+      const tabName = TAB_NAME_BY_MODE[parseHomeMode()];
+      if (tabName && Array.isArray(data.tab) && data.tab.length) {
         let kept = data.tab.filter((t) => ((t && t.uri) || "").indexOf("pegasus/promo") >= 0);
         if (!kept.length) kept = [data.tab[0]]; // 容错：没匹配到就留第一个，免得顶栏空掉被 App 回退成默认全栏
-        kept[0].name = "稍后再看";
+        kept[0].name = tabName;
         kept[0].default_selected = 1;
         data.tab = [kept[0]]; // ⚠️ 必须是数组！赋单个对象 App 会判无效、保留原生 tab（踩过的坑）
       }
@@ -436,6 +479,17 @@ function handleTab() {
     return;
   }
 
+  // 模式经 feed/index 那条 [Script] 的 argument=[{homeShowWatchLater}] 传入。
+  // ⚠️ 那条 [Script] 不能再用 enable={homeShowWatchLater} 门控：enable= 只认 true/false，
+  //    select 给的是中文档名 → 每一档都会被判成 false、脚本永不执行。故改成恒开、脚本内自己分流，
+  //    「关」在这里原样放行。
+  const mode = parseHomeMode();
+  if (mode === MODE_OFF) {
+    LOG("mode=关·原样放行原生推荐流");
+    $done({}); // 空对象 = 不改写，服务器响应原样交给 App
+    return;
+  }
+
   const q = parseQuery(url);
 
   // 保留原 feed 的 config（feed/index 响应是明文 JSON，可直接 parse；上游若已清空则没有，可接受）
@@ -449,8 +503,19 @@ function handleTab() {
   const col = parseInt(q.column, 10);
   const isDouble = (col === 2 || col === 4);
 
-  // 随机排列开关：feed/index 那条 [Script] 传 argument=[{randomWatchLater}] → $argument。
-  const randomOn = getArgFlag("randomWatchLater");
+  if (mode === MODE_BLANK) {
+    LOG("mode=空白界面·返回空 items·col=" + col);
+    $done({ body: buildFeed([], config) });
+    return;
+  }
+
+  if (mode === MODE_DAILY) {
+    handleDaily(q, isDouble, config);
+    return;
+  }
+
+  // —— 以下是「稍后再看」两档（随机档每次刷新洗牌）——
+  const randomOn = (mode === MODE_LATER_RANDOM);
 
   // 刷新 vs 加载更多：靠 pull 参数判定（capture60 实测：下拉刷新 pull=1，上滑加载更多 pull=0）。
   // 不能用 App 回传的 idx 当游标——它恒为首屏顶部卡的 idx、永不前进（见文件头说明）。
@@ -523,7 +588,7 @@ function handleTab() {
       }
       // 缓存原始 list（构卡延迟到出页时按列数决定），首屏返回前 PAGE_SIZE 条
       const raw = j.data.list;
-      // 随机排列（randomWatchLater 开时）：只在刷新这一刻洗一次牌并存进缓存，
+      // 随机排列（「稍后再看（随机）」档）：只在刷新这一刻洗一次牌并存进缓存，
       // 之后翻页读的是同一份已洗序 → 不重复/不漏；每次下拉刷新重新进到这里 = 重洗。
       if (randomOn) shuffle(raw);
       LOG("注入稍后再看 共" + raw.length + "条 col=" + col + " 首屏" + Math.min(PAGE_SIZE, raw.length) + "条 双列=" + isDouble + " 随机=" + randomOn);
@@ -555,6 +620,98 @@ function readOffset() {
 }
 function writeOffset(n) {
   try { $persistentStore.write(String(n), OFFSET_KEY); } catch (e) {}
+}
+
+// ===== 「每天1次推送」档 =====
+// 规则：一天只投放一屏内容，且这一屏**只在 App 冷启动那一帧**给；会话内的刷新/加载更多一律给空。
+//   1. 当天还没投放 → 原样放行 B 站原生推荐（App 拿到这一屏），把 items 连同日期/列数存下来。
+//   2. 当天已投放 + 冷启动（open_event=cold）→ **回放**这一屏（此时 App 列表是空的，回放是"填满"）。
+//   3. 当天已投放 + 其他一切请求（下拉刷新 / 自动刷新 / 上滑加载更多）→ 返回空 items。
+//   4. 跨天（设备本地日期变化）自动重置。
+//
+// ⚠️ 两次真机 bug 都出在这里，判据全靠下面这条抓包结论（cap56/58/60/66/68/71/72，14 条 feed/index）：
+//    | 请求         | open_event | pull | idx            |
+//    | 冷启动首帧   | cold       | 1    | 0              |
+//    | 刷新(含自动) | 无         | 1    | 它手里最大 idx |
+//    | 加载更多     | 无         | 0    | 它手里最大 idx |
+//    ① 初版「当天之后的刷新回放缓存」→ **同一批视频出现两遍**（"多次下拉还是只有 2 次同样的列表"）：
+//       App 对**会话内刷新**的响应是**追加**语义，回放被当成新一页拼在了列表后面。
+//    ② 改成「一律返回空」→ **整档完全加载不出来**：App 冷启动后手里什么都没有，全给空 = 空白页。
+//    ⇒ 正解是按 open_event 分流：冷启动＝App 手里是空的，回放不会重复；刷新才是会追加的那种，给空。
+//
+// 单/双列：卡型由服务器按请求的 column 下发，缓存的卡塞进另一种列数渲染不出来（整页空白，§14 双列坑）
+//          → 缓存里记 dbl，用户中途切列数视同「新的一天」重新放行一次并按新列数存。
+// 空/异常响应不消耗当天配额（不写缓存），免得因为一次网络抖动把首页锁死一整天。
+// LOG 里带 pull/idx/open：要复查 App 到底发了几次、各是什么请求，直接看 Loon 日志的 [HWL] 行即可。
+function todayStamp() {
+  const d = new Date();
+  return d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate();
+}
+
+// 冷启动判据：以 open_event=cold 为准（当前 build 必带）。万一日后 build 不再下发 open_event，
+// 才退回用 idx 判——14 条抓包里 idx=0 只出现在冷启动那几条，会话内请求都带着它手里的最大 idx。
+function isColdStart(q) {
+  if (q.open_event != null) return /cold/i.test(q.open_event);
+  return q.pull !== "0" && !parseInt(q.idx, 10);
+}
+
+// 这一档当天不会再有新内容 → 关掉 App 的自动刷新（真实 config：auto_refresh_time=1200、
+// auto_refresh_time_by_appear=1800、…_by_biz），省得它每 20/30 分钟白跑一次请求；
+// 同时清掉 toast，免得弹「发现N条新内容」而实际什么也没来。
+function dailyConfig(config) {
+  if (!config) return config;
+  const c = Object.assign({}, config);
+  Object.keys(c).forEach((k) => { if (k.indexOf("auto_refresh_time") === 0) c[k] = 86400; });
+  if (c.toast) c.toast = {};
+  return c;
+}
+
+function handleDaily(q, isDouble, config) {
+  const today = todayStamp();
+  let cache = null;
+  try {
+    const s = $persistentStore.read(DAILY_KEY);
+    if (s) cache = JSON.parse(s);
+  } catch (e) {}
+  const delivered = cache && cache.date === today && cache.dbl === isDouble
+    && Array.isArray(cache.items) && cache.items.length;
+  const trace = "·pull=" + q.pull + "·idx=" + q.idx + "·open=" + q.open_event + "·双列=" + isDouble;
+
+  if (!delivered) {
+    // 加载更多不配当「今天这一屏」（那是半截内容）→ 给空，配额留给下一次刷新/冷启动
+    if (q.pull === "0") {
+      LOG("daily 今天还没投放·加载更多先给空" + trace);
+      $done({ body: buildFeed([], dailyConfig(config)) });
+      return;
+    }
+    // 今天还没投放过（或换了列数）→ 放行这一屏，并记下来
+    try {
+      const orig = JSON.parse($response.body);
+      const items = orig && orig.data && Array.isArray(orig.data.items) ? orig.data.items : null;
+      if (items && items.length) {
+        $persistentStore.write(JSON.stringify({ date: today, dbl: isDouble, items }), DAILY_KEY);
+        LOG("daily 投放今天这一屏·" + items.length + "条" + trace);
+        orig.data.config = dailyConfig(orig.data.config);
+        $done({ body: JSON.stringify(orig) });
+        return;
+      }
+      LOG("daily 响应无 items·原样放行·不消耗当天配额" + trace); // 下次请求再试着存
+    } catch (e) {
+      LOG("daily 响应解析失败·原样放行·不消耗当天配额" + trace);
+    }
+    $done({});
+    return;
+  }
+
+  // 冷启动：App 手里是空的 → 回放今天这一屏（"填满"，不是"追加"，不会重复）
+  if (isColdStart(q)) {
+    LOG("daily 冷启动回放今天这一屏·" + cache.items.length + "条" + trace);
+    $done({ body: buildFeed(cache.items, dailyConfig(config)) });
+    return;
+  }
+  // 会话内刷新/加载更多：给空，绝不能回放（回放会被追加 → 重复）
+  LOG("daily 今天已投放过·返回空" + trace);
+  $done({ body: buildFeed([], dailyConfig(config)) });
 }
 
 function fallbackAndDone(config, isDouble) {
