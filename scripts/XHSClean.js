@@ -209,6 +209,29 @@ var FILTER_LOCALFEED_EXHAUSTED = parseSwitch('filterLocalfeedExhausted', true);
 
 const url = $request.url;
 
+// ─── 诊断日志 ────────────────────────────────────────────────────────────────
+// 每条被本脚本接手的请求都会往 Loon「插件 → 脚本日志」打一行，用来一眼区分两种「没生效」：
+//   • 日志里有这条 → 脚本确实跑了（问题在 App 自建缓存，或别的小红书插件同 URL 覆盖——Loon 靠后者赢）
+//   • 日志里没这条 → 请求压根没进脚本（旧 HTTP/2 长连接复用 / MITM 没覆盖 / 账号切换后 host 变成 rnote）
+// 背景与排查顺序见 XIAOHONGSHU_REFERENCE.md「已知坑」5。
+// ⚠️ 只打 path 不打 query：query 里带 token/设备信息，日志可能被截图外发。
+function logXHS(msg) {
+  try { console.log('[XHS] ' + msg); } catch (e) { /* 日志失败绝不能影响改写 */ }
+}
+
+// 从完整 URL 取 path（去掉 scheme+host 与 query）。
+function shortPath(u) {
+  var s = String(u || '').replace(/^https?:\/\/[^/]+/, '');
+  var i = s.indexOf('?');
+  return i === -1 ? s : s.slice(0, i);
+}
+
+// 各 handler 的 catch 统一走这里：原本 `catch(e){$done({})}` 是**完全静默**的，
+// 响应体一旦 parse 失败（编码没解开 / 结构大改）就原样放行，症状和「脚本根本没跑」一模一样。
+function logFail(e) {
+  logXHS(shortPath(url) + ' 改写失败，原样放行: ' + e);
+}
+
 if (typeof $response === 'undefined') {
   // ── 请求阶段：homefeed / categories / localfeed / imagefeed / videofeed 强制 gzip ──
   forceGzip();
@@ -232,6 +255,7 @@ function forceGzip() {
     if (k.toLowerCase() === 'accept-encoding') delete headers[k];
   });
   headers['Accept-Encoding'] = 'gzip';
+  logXHS('请求 ' + shortPath(url) + ' → 强制 Accept-Encoding: gzip');
   $done({ headers: headers });
 }
 
@@ -240,7 +264,11 @@ function forceGzip() {
 function filterFeed() {
   try {
     var body = JSON.parse($response.body);
+    if (!body || !Array.isArray(body.data)) {
+      logXHS('首页 响应里没有 data 数组（结构变了？）→ 原样放行');
+    }
     if (body && Array.isArray(body.data)) {
+      var received = body.data.length;
       var filtered = body.data.filter(function (item) {
         logUnknownCard(item);                                  // 诊断用，见其定义处
         if (BLOCK_LIVE_CARD && isLiveCard(item)) return false;
@@ -251,10 +279,14 @@ function filterFeed() {
         if (cat && BLOCK_CATEGORIES.indexOf(cat) !== -1) return false;
         return true;
       });
+      logXHS('首页 收到 ' + received + ' 条 → 过滤后 ' + filtered.length + ' 条'
+        + '（filterVideo=' + FILTER_VIDEO + ' 分类过滤=' + FILTER_BY_CATEGORY
+        + ' 直播=' + BLOCK_LIVE_CARD + ' 热点=' + BLOCK_HOT_CARD + '）');
       body.data = applyDailyLimit(filtered).map(injectCategory);
     }
     $done({ body: JSON.stringify(body) });
   } catch (e) {
+    logFail(e);
     $done({});
   }
 }
@@ -324,13 +356,20 @@ function injectTitlePrefix(item, label) {
 function unfixCategories() {
   try {
     var body = JSON.parse($response.body);
-    if (UNFIX_HOMEFEED_TABS && body && body.data && Array.isArray(body.data.categories)) {
+    if (!UNFIX_HOMEFEED_TABS) {
+      logXHS('首页Tab 功能关闭，原样放行');
+    } else if (body && body.data && Array.isArray(body.data.categories)) {
+      var unfixed = 0;
       body.data.categories.forEach(function (c) {
-        if (c && c.fixed === true) c.fixed = false;
+        if (c && c.fixed === true) { c.fixed = false; unfixed++; }
       });
+      logXHS('首页Tab 共 ' + body.data.categories.length + ' 个 → 解锁固定 tab ' + unfixed + ' 个');
+    } else {
+      logXHS('首页Tab 响应里没有 data.categories（结构变了？）→ 原样放行');
     }
     $done({ body: JSON.stringify(body) });
   } catch (e) {
+    logFail(e);
     $done({});
   }
 }
@@ -341,11 +380,18 @@ function unfixCategories() {
 function filterLocalfeed() {
   try {
     var body = JSON.parse($response.body);
-    if (body && Array.isArray(body.data) && FILTER_LOCALFEED_EXHAUSTED) {
+    if (!body || !Array.isArray(body.data)) {
+      logXHS('同城 响应里没有 data 数组（结构变了？）→ 原样放行');
+    } else if (!FILTER_LOCALFEED_EXHAUSTED) {
+      logXHS('同城 功能关闭，收到 ' + body.data.length + ' 条全部放行');
+    } else {
+      var received = body.data.length;
       body.data = body.data.filter(function (item) { return !item.local_content_exhausted; });
+      logXHS('同城 收到 ' + received + ' 条 → 丢弃非同城填充后 ' + body.data.length + ' 条');
     }
     $done({ body: JSON.stringify(body) });
   } catch (e) {
+    logFail(e);
     $done({});
   }
 }
@@ -361,9 +407,15 @@ function filterLocalfeed() {
 function cleanNoteDetail() {
   try {
     var body = JSON.parse($response.body);
-    if (!body || !Array.isArray(body.data)) { $done({}); return; }
+    if (!body || !Array.isArray(body.data)) {
+      logXHS('笔记详情 ' + shortPath(url) + ' 响应里没有 data 数组（结构变了？）→ 原样放行');
+      $done({});
+      return;
+    }
 
     var isVideoFeed = /\/videofeed(\?|$)/.test(url);
+    var feedName = isVideoFeed ? '视频流' : '图文笔记';
+    var received = body.data.length;
 
     // 阻止下滑到下一个视频。⭐126_1785934806867 抓包修正机制（此前记的「一次返一条」已过时）：
     // videofeed 一次返 **3 条** —— data[0]=你点开的那条，data[1]/[2]=推荐的「下两条」。
@@ -392,21 +444,30 @@ function cleanNoteDetail() {
         // ⚠️ 下滑会出现一张空白视频页，这是**已知且接受**的表现，别再去"修"它，见 BLOCK_VIDEO_SCROLL 注释。
         body.data = kept;
         markFeedEnd(kept);
+        logXHS('视频流 收到 ' + received + ' 条 → 阻止下滑后留 ' + kept.length + ' 条'
+          + (kept.length ? '（当前视频）' : '（本批全是推荐项 = App 在翻页，已清空）'));
+      } else {
+        logXHS('视频流 收到 ' + received + ' 条，但 source_note 和 note_id 都取不到'
+          + ' → 整批放行不动（判据字段可能改名了，去 XIAOHONGSHU_REFERENCE.md 对一下）');
       }
     }
 
+    var unlocked = 0;
     if (UNLOCK_SAVE_COPY) {
       body.data.forEach(function (entry) {
         if (entry && Array.isArray(entry.note_list)) {
-          entry.note_list.forEach(unlockNote); // imagefeed
+          entry.note_list.forEach(function (n) { unlockNote(n); unlocked++; }); // imagefeed
         } else {
-          unlockNote(entry);                   // videofeed
+          unlockNote(entry); unlocked++;                                        // videofeed
         }
       });
     }
+    logXHS(feedName + ' 收到 ' + received + ' 条 → 输出 ' + body.data.length + ' 条，'
+      + (UNLOCK_SAVE_COPY ? '解锁复制/下载 ' + unlocked + ' 条笔记' : '复制/下载解锁功能关闭'));
 
     $done({ body: JSON.stringify(body) });
   } catch (e) {
+    logFail(e);
     $done({});
   }
 }
