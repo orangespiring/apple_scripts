@@ -1,5 +1,5 @@
 #!name=Bilibili 去广告+信息流净化
-#!desc=去广告, 首页信息流五档可选（改稍后再看/每天1次推送/空白/原生）, 搜索页按标题/UP名/热评做相关性过滤, 播放页过滤信息流, 空降助手
+#!desc=去广告, 首页信息流五档可选（默认原生流+过滤/改稍后再看/每天1次推送/空白）, 搜索页相关性过滤+最多显示n条, 播放页过滤信息流, 空降助手
 #!author=@orangespiring；gRPC/JSON 去广告脚本基于 kokoryh/Sparkle[https://github.com/kokoryh/Sparkle]
 #!openUrl=https://apps.apple.com/app/id736536022
 #!tag=去广告
@@ -16,9 +16,12 @@
 [Argument]
 # —— 本插件独有 ——
 cleanRelates = switch,true,tag=播放页·清空推荐 (和'加载优化'冲突),desc=连正常视频推荐一起清空（关=仅去广告、保留推荐）
-homeShow = select,"改稍后再看（随机）","改稍后再看","每天1次推送","空白界面","关",tag=首页·信息流模式,desc=只控制 feed/index 的内容 —— 改稍后再看（随机）：首页换成「稍后再看」列表（需登录）并在每次下拉刷新时重新洗牌；改稍后再看：同上但按 B 站默认顺序；每天1次推送：当天第一次请求放行 B 站原生推荐（就这一屏），之后杀后台重开还能看到同一屏、但下拉刷新与上滑加载都不再给新内容，次日自动重置；空白界面：首页信息流恒空；关：完全不改、原生推荐流。顶栏 tab 名随模式变（改稍后再看两档=「稍后再看」／每天1次推送与空白界面=「首页」／关=保留原生 tab）；右上角入口与底栏精简恒开、不受影响
+homeShow = select,"原生信息流","改稍后再看（随机）","改稍后再看","每天1次推送","空白界面",tag=首页·信息流模式,desc=只控制 feed/index 的内容 —— 原生信息流（默认）：保留 B 站自己的推荐流，只按下面两个参数做过滤/加标签前缀；改稍后再看（随机）：首页换成「稍后再看」列表（需登录）并在每次下拉刷新时重新洗牌；改稍后再看：同上但按 B 站默认顺序；每天1次推送：当天第一次请求放行 B 站原生推荐（就这一屏），之后杀后台重开还能看到同一屏、但下拉刷新与上滑加载都不再给新内容，次日自动重置；空白界面：首页信息流恒空。顶栏 tab 名随模式变（改稍后再看两档=「稍后再看」／每天1次推送与空白界面=「首页」／原生信息流=保留原生 tab）；右上角入口与底栏精简恒开、不受影响
+homeFeedFilter = input,"去广告(1) 去直播(1) 去竖屏(1) 过滤(0)秒以下 标签前缀(1) //括号里1=开 0=关 秒那项填秒数",tag=首页·原生信息流过滤,desc=一个文本框管几件事，括号里的数字就是取值：开关类 1=开／0=关；「秒」那条填秒数（0=不按时长丢）；「标签前缀」=在标题前加上 B 站给这条视频贴的话题名，形如 [杀戮尖塔2] 标题…（同小红书那个分类前缀）；⚠️这一项**没写就按开处理**（老配置串里没有它也能用上），要关就显式写 标签前缀(0)。// 或 # 之后的内容当注释忽略，可以自己写备注。括号全角半角都行，写成 去广告=1 或 去广告：1 也认；用空格、逗号、顿号、分号、换行分隔都行；只按关键词识别（广告／直播／竖屏／秒／标签），措辞随便改；整串留空=全不过滤。⚠️只作用于 B 站原生推荐流（模式=原生信息流、每天1次推送）；「改稍后再看」两档是你自己收藏的内容，不参与
+homeBlockWords = input,"//空格分隔多个词 命中标题/UP名/话题标签就丢 加前缀可只匹配一处 title: up: tag:",tag=首页·屏蔽词,desc=空格分隔多个词，默认「标题／UP名／话题标签」三处任一命中就丢掉这条。想只匹配一处就加前缀：title:测评 只看标题、up:某某UP 只看UP名、tag:石头A30 只看话题标签（中文 标题:／up主:／标签: 也认）。子串匹配、不区分大小写；// 或 # 之后当注释（默认值就是一句注释，等于不屏蔽）；留空=不屏蔽。⚠️话题标签是 B 站给这条推荐贴的**一个**话题名（爽文／杀戮尖塔2／石头A30Pro2.0 这种），不是视频详情页那种多标签，也不是一级分区。作用范围同上：只管原生推荐流
 # —— 常规净化 ——
 cleanSearch = switch,true,tag=搜索页·相关性过滤,desc=视频卡须标题/UP名/热评命中搜索词才留（去广告恒开；课程/番剧/用户卡放行）
+searchMaxItems = input,"15",tag=搜索页·最多显示n条,desc=一次搜索最多给这么多条（默认 15）；数满后继续上滑不再加载新结果。与上面的相关性过滤联动＝先丢掉不相关的、再取前 n 条，所以实际条数可能不足 n。0 或留空=不限条数。换个词搜、或距上次搜索超过 10 分钟会自动重新计数
 searchMinDur = input,"0",tag=搜索页·过滤<n秒的视频,desc=填秒数，短于它的视频卡丢弃；0 或留空=不按时长丢（默认）。也认 "1:30" 这种写法，前后空格/换行会自动去掉
 cleanMine = switch,true,tag=我的页·精简
 cleanSplash = switch,true,tag=开屏·广告列表清空
@@ -39,10 +42,10 @@ DOMAIN,cm.bilibili.com,REJECT
 # ===== 脚本 =====
 [Script]
 
-# — 首页信息流模式（feed/index → 改稍后再看/每天1次推送/空白/原生，见 homeShow）—
+# — 首页信息流模式（feed/index → 原生信息流/改稍后再看/每天1次推送/空白，见 homeShow）—
 #   ⚠️ 恒开、不能用 enable={homeShow} 门控：enable= 只认 true/false，select 给的是中文档名
-#      → 每一档都会被判成 false、脚本永不执行。「关」这一档由脚本内部原样放行。
-http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/v2/feed/index script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliHome.js, requires-body=1, argument=[{homeShow}], tag=B站·首页信息流模式
+#      → 每一档都会被判成 false、脚本永不执行。「原生信息流」这一档由脚本内部按过滤参数处理。
+http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/v2/feed/index script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliHome.js, requires-body=1, argument=[{homeShow},{homeFeedFilter},{homeBlockWords}], tag=B站·首页信息流模式
 
 # — tab/v2 接管（恒开：右上角入口 data.top + 底栏精简 + 删「…」菜单 恒改；顶栏 tab 是否折叠、折叠后叫什么名随 homeShow 模式，经 argument 传入）—
 #   Loon 同 URL「最后一个脚本整体覆盖、各自读原始响应」(§13b)，故 tab/v2 只能由单一脚本接管，全部并入本脚本。
@@ -56,7 +59,7 @@ http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/v2/splash/list script-
 
 # — gRPC 去广告 + 播放页推荐（fork 自 Sparkle）—
 # 覆盖：DynAll / Popular / View / ViewProgress / RelatesFeed / PlayView / PlayViewUnite / SearchAll / DmView / MainList / PGC PlayView
-http-response ^https://(?:grpc\.biliapi\.net|app\.bili(?:bili\.com|api\.net))/bilibili\.(?:app\.(?:show\.v1\.Popular/Index|dynamic\.v2\.Dynamic/DynAll|view(?:unite)?\.v1\.View/(?:View|ViewProgress|RelatesFeed)|playurl\.v1\.PlayURL/PlayView|playerunite\.v1\.Player/PlayViewUnite)|polymer\.app\.search\.v1\.Search/SearchAll|community\.service\.dm\.v1\.DM/DmView|main\.community\.reply\.v1\.Reply/MainList|pgc\.gateway\.player\.v2\.PlayURL/PlayView)$ script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliProtobufResponse.js, requires-body=true, binary-body-mode=true, argument=[{displayUpList},{purifyComment},{sponsorBlock},{cleanRelates},{cleanSearch},{searchMinDur},{logLevel}], tag=B站·gRPC去广告+播放页推荐
+http-response ^https://(?:grpc\.biliapi\.net|app\.bili(?:bili\.com|api\.net))/bilibili\.(?:app\.(?:show\.v1\.Popular/Index|dynamic\.v2\.Dynamic/DynAll|view(?:unite)?\.v1\.View/(?:View|ViewProgress|RelatesFeed)|playurl\.v1\.PlayURL/PlayView|playerunite\.v1\.Player/PlayViewUnite)|polymer\.app\.search\.v1\.Search/SearchAll|community\.service\.dm\.v1\.DM/DmView|main\.community\.reply\.v1\.Reply/MainList|pgc\.gateway\.player\.v2\.PlayURL/PlayView)$ script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliProtobufResponse.js, requires-body=true, binary-body-mode=true, argument=[{displayUpList},{purifyComment},{sponsorBlock},{cleanRelates},{cleanSearch},{searchMaxItems},{searchMinDur},{logLevel}], tag=B站·gRPC去广告+播放页推荐
 
 # — 请求侧（上游 Sparkle，直引）—
 

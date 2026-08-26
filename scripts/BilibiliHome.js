@@ -13,9 +13,14 @@
  *                       （open_event=cold）那一帧回放**它，会话内的刷新/加载更多一律给空
  *                       → 一天只有一屏内容、不增不减，跨天（设备本地日期变化）自动重置
  *   空白界面          → data.items 恒空
- *   关                → 完全不改 feed/index（原生推荐流）
+ *   原生信息流（默认）→ 不改 B 站的推荐流本身，只按 homeFeedFilter/homeBlockWords 过滤（旧档名「关」仍认）
+ *
+ * 【原生流过滤】两个 input 参数，均只作用于「原生信息流」与「每天1次推送」两档的原生卡片：
+ *   homeFeedFilter  数字开关集合 —— 去广告/去直播/去竖屏/时长下限/[话题]标题前缀（见 parseFeedFilter）
+ *   homeBlockWords  屏蔽词 —— 标题/UP名/话题标签，可用 title: up: tag: 限定（见 parseBlockWords）
+ *   两者都不启用时「原生信息流」档仍走零成本 $done({})。
  *   顶栏 tab 名随模式：稍后再看两档 =「稍后再看」；每天1次推送/空白界面 =「首页」（内容不是稍后再看，
- *   叫「稍后再看」名实不符）；关 = 不折叠、保留原生 tab。右上角入口/底栏精简/删「…」菜单 恒改。
+ *   叫「稍后再看」名实不符）；原生信息流 = 不折叠、保留原生 tab。右上角入口/底栏精简/删「…」菜单 恒改。
  *
  * 【「稍后再看」两档的实现】
  *   - 脚本内用 $httpClient.get 反查 /x/v2/history/toview/v2/list（需签名）
@@ -65,27 +70,166 @@ const MODE_LATER_RANDOM = "later_random"; // 稍后再看（随机）
 const MODE_LATER = "later";               // 稍后再看
 const MODE_DAILY = "daily";               // 每天1次推送
 const MODE_BLANK = "blank";               // 空白界面
-const MODE_OFF = "off";                   // 关
+const MODE_OFF = "off";                   // 原生信息流（旧档名「关」）
 
 // 按关键词判断而不是整串比对（同 XHSClean 的做法）：[Argument] 里的选项文案怎么改都不会打断解析。
-// 认不出的值一律回落默认档，别静默把功能关掉。
+// ⚠️ 改档名时必须同步在这里加关键词，否则新档名匹配不上 → 静默走回落分支。
 function parseHomeMode() {
   // 参数名 2026-08-15 由 homeShowWatchLater 改成 homeShow；旧名留作兜底——插件与脚本分别住在
   // gist / 公开仓库，更新必有先后，读不到就静默回落默认档（跟"脚本没跑"一个症状），很难查。
   let raw = getArgRaw("homeShow");
   if (raw == null) raw = getArgRaw("homeShowWatchLater");
-  if (raw == null) return MODE_LATER_RANDOM;                       // 未接入参数 → 默认档
+  if (raw == null) return MODE_OFF;                                // 未接入参数 → 不接管首页
   if (typeof raw === "boolean") return raw ? MODE_LATER_RANDOM : MODE_OFF; // 兼容旧 switch 配置
   const s = String(raw).trim().replace(/^["'\[]+|["'\]]+$/g, "");
-  if (s === "" || s === "true" || s === "1") return MODE_LATER_RANDOM;
+  if (s === "true" || s === "1") return MODE_LATER_RANDOM;         // 旧 switch 配置的 true（空串则落到末尾的回落分支）
   if (s === "false" || s === "0") return MODE_OFF;
   if (s.indexOf("随机") !== -1) return MODE_LATER_RANDOM;          // ⚠️ 必须先判：「稍后再看（随机）」也含「稍后」
   if (s.indexOf("稍后") !== -1) return MODE_LATER;
   if (s.indexOf("每天") !== -1 || s.indexOf("1次") !== -1 || s.indexOf("一次") !== -1) return MODE_DAILY;
   if (s.indexOf("空白") !== -1) return MODE_BLANK;
-  if (s.indexOf("关") !== -1) return MODE_OFF;
-  return MODE_LATER_RANDOM;
+  if (s.indexOf("原生") !== -1 || s.indexOf("关") !== -1) return MODE_OFF; // 「原生信息流」是 2026-08-26 起的新档名，「关」是旧名
+  // ⚠️ 认不出的档位回落「原生信息流」而不是稍后再看：插件与 JS 的更新必有先后，档名一改、
+  //    旧 JS 就一个都匹配不上（2026-08-26 真机踩过：插件已给「原生信息流」、gist 的 JS 还是旧版
+  //    → 静默落回稍后再看，用户以为是 bug）。回落到「不动 B 站的东西」才是最小惊讶。
+  return MODE_OFF;
 }
+
+// ===== 原生信息流过滤（[Argument] input 参数 homeFeedFilter）=====
+// 一个文本框管四件事，写法形如：「去广告(1) 去直播(1) 去竖屏(1) 过滤(240)秒以下」
+//   · 括号里的数字就是取值：开关类 1=开/0=关；「秒」那条填秒数，0 或不写=不按时长丢。
+//   · 括号用全角（）半角()都行，写成 去广告=1 / 去广告：1 也认；分隔符任意（空格、中英文逗号、顿号、分号、换行）。
+//   · 只按关键词认（广告/直播/竖屏/秒|时长），所以措辞随便改；认不出的段落忽略，整串留空=全不过滤。
+//   · 支持注释：每行 // 或 # 之后的内容一律忽略（默认值里就带一句「1=开 0=关」的提醒）。
+// ⚠️ 只作用于 **B 站原生推荐流**（模式=原生信息流、每天1次推送）。「改稍后再看」两档的卡片是脚本自己造的、
+//    是用户自己收藏的内容，不该拿广告/直播/竖屏这套去筛，故不参与。
+function parseFeedFilter(raw) {
+  const out = { ad: false, live: false, vertical: false, minDur: 0, tagPrefix: false };
+  // 先去掉注释：每行里 // 或 # 之后的内容全部丢掉。默认值里就带一句「1=开 0=关」的提醒，
+  // 不去注释的话「秒那项填秒数」这种说明文字会被当成配置项（含"秒"、没数字 → 误设成 1 秒）。
+  const s = String(raw == null ? "" : raw)
+    .split(/\n/).map((l) => l.replace(/(\/\/|#|＃).*$/, "")).join(" ").trim();
+  if (!s) return out;                    // 整串留空 = 全不过滤（含前缀）
+  // ⚠️ 非空配置串里**没写**「标签前缀」时按开处理。原因：Loon 会保留用户已存的参数值，
+  //    往这个文本框里新加一项，老配置串永远"缺席"→ 新功能到不了老用户（2026-08-26 真机踩过：
+  //    去广告/去直播都生效、唯独前缀不出来，就是老串里没有这一项）。前缀是纯展示、不删内容，
+  //    缺席按默认（开）最合理；要关就显式写 标签前缀(0)。删卡类规则仍是"缺席=不删"，不擅自开。
+  out.tagPrefix = true;
+  s.split(/[\s,，、;；]+/).forEach((seg) => {
+    if (!seg) return;
+    const m = seg.match(/(\d+)/);          // 段里第一个数字就是取值
+    const n = m ? parseInt(m[1], 10) : 1;  // 没写数字视为 1（开）
+    if (seg.indexOf("广告") >= 0) out.ad = n > 0;
+    else if (seg.indexOf("直播") >= 0) out.live = n > 0;
+    else if (seg.indexOf("竖屏") >= 0 || /vertical/i.test(seg)) out.vertical = n > 0;
+    else if (seg.indexOf("标签") >= 0 || seg.indexOf("前缀") >= 0) out.tagPrefix = n > 0;
+    else if (seg.indexOf("秒") >= 0 || seg.indexOf("时长") >= 0) out.minDur = n > 0 ? n : 0;
+  });
+  return out;
+}
+
+// 判据全部来自 capture156 的原生 feed/index（column=4）实测：
+//   广告   → 带 ad_info 字段；card_type=cm_v2(card_goto=ad_av / ad_web_s) 与 banner_v8(card_goto=banner) 都属此类
+//   直播   → card_goto/goto = "live"（card_type=small_cover_v9）
+//   竖屏   → goto = "vertical_av"（注意 card_goto 仍是 "av"，只看 card_goto 认不出来）
+//   时长   → player_args.duration（秒）；直播/图文卡没有这个字段 → 视为 0 = 不按时长丢
+function isAdCard(it) {
+  if (!it) return false;
+  if (it.ad_info != null) return true;
+  const cg = String(it.card_goto || ""), ct = String(it.card_type || "");
+  return cg.indexOf("ad") === 0 || ct.indexOf("cm") === 0 || cg === "banner";
+}
+function isLiveCard(it) {
+  return String((it && it.card_goto) || "") === "live" || String((it && it.goto) || "") === "live";
+}
+function isVerticalCard(it) {
+  return /vertical/i.test(String((it && it.goto) || "") + "|" + String((it && it.card_goto) || ""));
+}
+function cardDuration(it) {
+  const pa = (it && it.player_args) || {};
+  return parseInt(pa.duration, 10) || 0;
+}
+
+// ===== 屏蔽词（[Argument] input 参数 homeBlockWords）=====
+// 空格分隔多个词；默认「标题 / UP名 / 话题标签」三处任一命中即丢。可加前缀只匹配其中一处：
+//   title:测评   只看标题（也认 标题:）
+//   up:某某UP    只看 UP 名（也认 up主:）
+//   tag:石头A30   只看话题标签（也认 标签:）
+// 同样支持 // 与 # 注释；大小写不敏感；子串匹配（"抽奖"能命中"新春抽奖活动"）。
+// ⚠️ 话题标签 = feed 卡片 args.tname，**一张卡只有一个**（不是视频详情页那种多标签），
+//    抓包实测是话题/IP/活动名（爽文、杀戮尖塔2、石头A30Pro2.0），不是一级分区。
+//    注意它与 toview（稍后再看）里的 tid/tname 不是一个体系——那边才是 17=单机游戏 这种分区。
+function parseBlockWords(raw) {
+  const out = { any: [], up: [], tag: [], title: [] };
+  const s = String(raw == null ? "" : raw)
+    .split(/\n/).map((l) => l.replace(/(\/\/|#|＃).*$/, "")).join(" ").trim();
+  if (!s) return out;
+  s.split(/[\s,，、;；]+/).forEach((seg) => {
+    if (!seg) return;
+    const m = seg.match(/^(up主|up|tag|标签|title|标题)[:：](.+)$/i);
+    if (!m) { out.any.push(seg.toLowerCase()); return; }
+    const k = m[1].toLowerCase(), w = m[2].trim().toLowerCase();
+    if (!w) return;
+    if (k === "up" || k === "up主") out.up.push(w);
+    else if (k === "tag" || k === "标签") out.tag.push(w);
+    else out.title.push(w);
+  });
+  return out;
+}
+const bwEmpty = (bw) => !bw || !(bw.any.length || bw.up.length || bw.tag.length || bw.title.length);
+
+function cardTexts(it) {
+  const a = (it && it.args) || {};
+  return {
+    title: String((it && it.title) || "").toLowerCase(),
+    up: String(a.up_name || (it && it.desc_button && it.desc_button.text) || "").toLowerCase(),
+    tag: String(a.tname || "").toLowerCase(),
+  };
+}
+function hitsBlockWords(it, bw) {
+  if (bwEmpty(bw)) return false;
+  const t = cardTexts(it);
+  const has = (arr, hay) => arr.some((w) => hay.indexOf(w) >= 0);
+  if (has(bw.title, t.title) || has(bw.up, t.up) || has(bw.tag, t.tag)) return true;
+  return bw.any.length > 0 && (has(bw.any, t.title) || has(bw.any, t.up) || has(bw.any, t.tag));
+}
+
+// 标题前缀注入：「[话题] 原标题」，参考 XHSClean 的 injectTitlePrefix。
+// 不截断（B 站标题本来就由服务端给定，App 自己会按行数截显示）；已带前缀的不重复加 →
+// 「每天1次推送」缓存里存的是注入后的卡，冷启动回放会再过一次，靠这个判断保持幂等。
+function injectTagPrefix(items) {
+  let n = 0;
+  (items || []).forEach((it) => {
+    const tag = it && it.args && it.args.tname;
+    if (!tag || !it.title) return;
+    const prefix = "[" + tag + "] ";
+    if (it.title.indexOf(prefix) === 0) return;
+    it.title = prefix + it.title;
+    n++;
+  });
+  return n;
+}
+
+// 按 homeFeedFilter 过滤一批原生卡片；返回 {items, dropped:{ad,live,vertical,dur}}
+function filterNativeItems(items, ff, bw) {
+  const anyRule = ff && (ff.ad || ff.live || ff.vertical || ff.minDur || ff.tagPrefix);
+  if (!Array.isArray(items) || (!anyRule && bwEmpty(bw))) {
+    return { items: items || [], dropped: null };
+  }
+  const d = { ad: 0, live: 0, vertical: 0, dur: 0, word: 0, tagged: 0 };
+  const kept = items.filter((it) => {
+    if (ff.ad && isAdCard(it)) { d.ad++; return false; }
+    if (ff.live && isLiveCard(it)) { d.live++; return false; }
+    if (ff.vertical && isVerticalCard(it)) { d.vertical++; return false; }
+    if (ff.minDur > 0) { const sec = cardDuration(it); if (sec > 0 && sec < ff.minDur) { d.dur++; return false; } }
+    if (hitsBlockWords(it, bw)) { d.word++; return false; } // ⚠️ 必须在注入前缀之前判，否则 title: 规则会撞上注入的 [话题]
+    return true;
+  });
+  if (ff.tagPrefix) d.tagged = injectTagPrefix(kept);
+  return { items: kept, dropped: d };
+}
+const ffLog = (d) => d ? ("广告" + d.ad + "/直播" + d.live + "/竖屏" + d.vertical + "/短片" + d.dur
+  + "/屏蔽词" + d.word + "·加前缀" + d.tagged) : "未启用";
 
 // —— 紧凑 md5（Joseph Myers 实现，UTF-8 安全）——
 function md5(str) {
@@ -419,7 +563,7 @@ function buildPage(rawList, start, isDouble) {
 //    多脚本各改一部分会互相吞掉 → 故把 data.top 入口 + data.bottom 精简 + 删 top_more（恒改）
 //    与 data.tab 折叠（受模式）全收进本函数一次性产出（原 BilibiliTabFeed.js 已删除，逻辑并入此处）。
 //    模式经 [Script] 的 argument={homeShowWatchLater} 传入 → $argument。
-//    data.tab：关 = 不动原生 tab（feed 也回原生推荐，名实相符）；其余四档 = 只留单 tab、名字见 TAB_NAME_BY_MODE。
+//    data.tab：原生信息流 = 不动原生 tab（名实相符）；其余四档 = 只留单 tab、名字见 TAB_NAME_BY_MODE。
 const TAB_FAV_URI = "bilibili://main/favorite";             // 收藏夹（原生页 deeplink）
 const TAB_LATER_URI = "bilibili://user_center/watch_later"; // 稍后再看（原生页 deeplink）
 const TAB_ICON_FAV = "http://i0.hdslb.com/bfs/archive/d79b19d983067a1b91614e830a7100c05204a821.png";
@@ -438,7 +582,7 @@ function handleTab() {
     const obj = JSON.parse(body);
     const data = obj && obj.data;
     if (data) {
-      // 顶栏 data.tab：除「关」外都折叠成单 tab（名字随模式）；「关」保留原生 tab 不动
+      // 顶栏 data.tab：除「原生信息流」外都折叠成单 tab（名字随模式）；原生档保留原生 tab 不动
       const tabName = TAB_NAME_BY_MODE[parseHomeMode()];
       if (tabName && Array.isArray(data.tab) && data.tab.length) {
         let kept = data.tab.filter((t) => ((t && t.uri) || "").indexOf("pegasus/promo") >= 0);
@@ -484,9 +628,29 @@ function handleTab() {
   //    select 给的是中文档名 → 每一档都会被判成 false、脚本永不执行。故改成恒开、脚本内自己分流，
   //    「关」在这里原样放行。
   const mode = parseHomeMode();
+  const ff = parseFeedFilter(getArgRaw("homeFeedFilter"));
+  const bw = parseBlockWords(getArgRaw("homeBlockWords"));
   if (mode === MODE_OFF) {
-    LOG("mode=关·原样放行原生推荐流");
-    $done({}); // 空对象 = 不改写，服务器响应原样交给 App
+    // 全不过滤 → 零成本放行；否则只删卡、其余原样（不动 config/顺序）
+    if (!ff.ad && !ff.live && !ff.vertical && !ff.minDur && !ff.tagPrefix && bwEmpty(bw)) {
+      LOG("mode=原生信息流·原样放行");
+      $done({});
+      return;
+    }
+    try {
+      const orig = JSON.parse($response.body);
+      const items = orig && orig.data && Array.isArray(orig.data.items) ? orig.data.items : null;
+      if (items) {
+        const f = filterNativeItems(items, ff, bw);
+        LOG("mode=原生信息流·过滤 " + items.length + "->" + f.items.length + "·丢弃" + ffLog(f.dropped));
+        orig.data.items = f.items;
+        $done({ body: JSON.stringify(orig) });
+        return;
+      }
+    } catch (e) {
+      LOG("mode=原生信息流·响应解析失败·原样放行");
+    }
+    $done({});
     return;
   }
 
@@ -510,7 +674,7 @@ function handleTab() {
   }
 
   if (mode === MODE_DAILY) {
-    handleDaily(q, isDouble, config);
+    handleDaily(q, isDouble, config, ff, bw);
     return;
   }
 
@@ -666,7 +830,7 @@ function dailyConfig(config) {
   return c;
 }
 
-function handleDaily(q, isDouble, config) {
+function handleDaily(q, isDouble, config, ff, bw) {
   const today = todayStamp();
   let cache = null;
   try {
@@ -687,10 +851,13 @@ function handleDaily(q, isDouble, config) {
     // 今天还没投放过（或换了列数）→ 放行这一屏，并记下来
     try {
       const orig = JSON.parse($response.body);
-      const items = orig && orig.data && Array.isArray(orig.data.items) ? orig.data.items : null;
-      if (items && items.length) {
+      const raw0 = orig && orig.data && Array.isArray(orig.data.items) ? orig.data.items : null;
+      const f0 = filterNativeItems(raw0, ff, bw);   // 先按 homeFeedFilter 过滤，缓存里存的就是干净的
+      const items = f0.items;
+      if (raw0 && items.length) {
         $persistentStore.write(JSON.stringify({ date: today, dbl: isDouble, items }), DAILY_KEY);
-        LOG("daily 投放今天这一屏·" + items.length + "条" + trace);
+        LOG("daily 投放今天这一屏·" + raw0.length + "->" + items.length + "条·丢弃" + ffLog(f0.dropped) + trace);
+        orig.data.items = items;
         orig.data.config = dailyConfig(orig.data.config);
         $done({ body: JSON.stringify(orig) });
         return;
@@ -705,8 +872,9 @@ function handleDaily(q, isDouble, config) {
 
   // 冷启动：App 手里是空的 → 回放今天这一屏（"填满"，不是"追加"，不会重复）
   if (isColdStart(q)) {
-    LOG("daily 冷启动回放今天这一屏·" + cache.items.length + "条" + trace);
-    $done({ body: buildFeed(cache.items, dailyConfig(config)) });
+    const fr = filterNativeItems(cache.items, ff, bw);   // 再过一遍：中途改了 homeFeedFilter 也能立刻生效
+    LOG("daily 冷启动回放今天这一屏·" + cache.items.length + "->" + fr.items.length + "条" + trace);
+    $done({ body: buildFeed(fr.items, dailyConfig(config)) });
     return;
   }
   // 会话内刷新/加载更多：给空，绝不能回放（回放会被追加 → 重复）
