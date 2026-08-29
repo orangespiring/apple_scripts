@@ -15,10 +15,9 @@
 
 [Argument]
 # —— 本插件独有 ——
-cleanRelates = switch,true,tag=播放页·清空推荐 (和'加载优化'冲突),desc=连正常视频推荐一起清空（关=仅去广告、保留推荐）
-homeShow = select,"默认信息流","过滤信息流","改稍后再看（随机）","改稍后再看","空白界面",tag=首页·信息流模式,desc=只控制 feed/index 的内容 —— 默认信息流（默认）：完全不动 B 站的推荐流，下面「原生信息流过滤」与「屏蔽词」两个参数一概不生效；过滤信息流：仍是 B 站的推荐流，但下面两个参数生效（去广告／去直播／去竖屏／去图文／时长下限／[话题]标题前缀／精简顶栏／每天推送n次／屏蔽词）；改稍后再看（随机）：首页换成「稍后再看」列表（需登录）并在每次下拉刷新时重新洗牌；改稍后再看：同上但按 B 站默认顺序；空白界面：首页信息流恒空。顶栏是否只留一个 tab 由「精简顶栏」决定（默认信息流档不生效）；折叠后的名字随模式变（改稍后再看两档=「稍后再看」／空白界面=「首页」／过滤信息流=不改名）。右上角入口与底栏精简恒开、不受影响
-homeFeedFilter = input,"去广告(1) 去直播(1) 去竖屏(1) 去图文(1) 过滤(240)秒以下 标签前缀(1) 精简顶栏(1) 每天推送(3)次 //括号里1=开 0=关 秒那项填秒数",tag=首页·原生信息流过滤,desc=⚠️只在「信息流模式＝过滤信息流」时生效，模式选「默认信息流」时整个参数不起作用。一个文本框管一串开关，括号里的数字就是取值：开关类 1=开／0=关；「秒」那条填秒数（0=不按时长丢）。「标签前缀」=标题前加上 B 站给这条视频贴的话题名，形如 [杀戮尖塔2] 标题…，没写也按开，要关就显式写 标签前缀(0)；「精简顶栏」=首页顶栏只留一个 tab（移除 热门／直播／追番等），没写时不折叠；「每天推送(n)次」=一天最多给 n 屏内容，每屏只在冷启动那一下给、会话内下拉刷新与上滑加载都不再出新内容，次日重置；0=不启用（照常无限刷）。// 或 # 之后当注释，可以自己写备注。括号全角半角都行，去广告=1 或 去广告：1 也认；空格、逗号、顿号、分号、换行都能分隔；只按关键词识别（广告／直播／竖屏／图文／秒／标签／顶栏／推送），措辞随便改；整串留空=全不过滤
-homeBlockWords = input,"//空格分隔多个词 命中标题/UP名/话题标签就丢 加前缀可只匹配一处 title: up: tag:",tag=首页·屏蔽词,desc=空格分隔多个词，默认「标题／UP名／话题标签」三处任一命中就丢掉这条。想只匹配一处就加前缀：title:测评 只看标题、up:某某UP 只看UP名、tag:石头A30 只看话题标签（中文 标题:／up主:／标签: 也认）。子串匹配、不区分大小写；// 或 # 之后当注释（默认值就是一句注释，等于不屏蔽）；留空=不屏蔽。⚠️只在「信息流模式＝过滤信息流」时生效，模式选「默认信息流」时本参数不起作用。⚠️话题标签是 B 站给这条推荐贴的**一个**话题名（爽文／杀戮尖塔2／石头A30Pro2.0 这种），不是视频详情页那种多标签，也不是一级分区。作用范围同上：只管原生推荐流
+homeShow = select,"默认信息流","过滤信息流","改稍后再看（随机）","改稍后再看","空白界面",tag=首页·信息流模式,desc=只控制 feed/index 的内容 —— 默认信息流（默认）：完全不动 B 站的推荐流，下面「过滤信息流」与「屏蔽词」两个参数一概不生效；过滤信息流：仍是 B 站的推荐流，但下面两个参数生效（去广告／去直播／去竖屏／去图文／时长下限／[话题]标题前缀／精简顶栏／每天推送n次／屏蔽词）；改稍后再看（随机）：首页换成「稍后再看」列表（需登录）并在每次下拉刷新时重新洗牌；改稍后再看：同上但按 B 站默认顺序；空白界面：首页信息流恒空。顶栏是否只留一个 tab 由「精简顶栏」决定（默认信息流档不生效）；折叠后的名字随模式变（改稍后再看两档=「稍后再看」／空白界面=「首页」／过滤信息流=不改名）。右上角入口与底栏精简恒开、不受影响
+homeFeedFilter = input,"去广告(1) 去直播(1) 去竖屏(1) 去图文(1) 去番剧纪录片(1) 过滤(240)秒以下 标签前缀(1) 精简顶栏(1) 每天推送(3)次 //括号里1=开 0=关 秒那项填秒数",tag=首页·过滤信息流,desc=⚠️只在「信息流模式＝过滤信息流」时生效，模式选「默认信息流」时整个参数不起作用。一个文本框管一串开关，括号里的数字就是取值：开关类 1=开／0=关；「秒」那条填秒数（0=不按时长丢）。「标签前缀」=标题前加上 B 站给这条视频贴的话题名，形如 [杀戮尖塔2] 标题…，没写也按开，要关就显式写 标签前缀(0)；「精简顶栏」=首页顶栏只留一个 tab（移除 热门／直播／追番等），没写时不折叠；「每天推送(n)次」=一天最多给 n 屏内容，每屏只在冷启动那一下给、会话内下拉刷新与上滑加载都不再出新内容，次日重置；0=不启用（照常无限刷）。// 或 # 之后当注释，可以自己写备注。括号全角半角都行，去广告=1 或 去广告：1 也认；空格、逗号、顿号、分号、换行都能分隔；「去番剧纪录片」=丢掉 B 站的 PGC 卡（番剧／纪录片／电影／电视剧，card_goto=bangumi），⚠️结构上分不出子类型，开了就是整类都丢；只想滤纪录片就别开它，改用下面的屏蔽词写 up:哔哩哔哩纪录片。只按关键词识别（广告／直播／竖屏／图文／番剧或纪录片／秒／标签／顶栏／推送），措辞随便改；整串留空=全不过滤
+homeBlockWords = input,"//空格分隔多个词 命中标题/UP名/话题标签就丢 加前缀可只匹配一处 title: up: tag:",tag=首页·屏蔽词,desc=空格分隔多个词，默认「标题／UP名／话题标签」三处任一命中就丢掉这条。想只匹配一处就加前缀：title:测评 只看标题、up:某某UP 只看UP名、tag:石头A30 只看话题标签（中文 标题:／up主:／标签: 也认）。子串匹配、不区分大小写；// 或 # 之后当注释（默认值就是一句注释，等于不屏蔽）；留空=不屏蔽。⚠️只在「信息流模式＝过滤信息流」时生效，模式选「默认信息流」时本参数不起作用。⚠️话题标签是 B 站给这条推荐贴的**一个**话题名，不是视频详情页那种多标签，也不是一级分区。作用范围同上：只管原生推荐流
 # —— 常规净化 ——
 cleanSearch = switch,true,tag=搜索页·相关性过滤,desc=视频卡须标题/UP名/热评命中搜索词才留（去广告恒开；课程/番剧/用户卡放行）
 searchMaxItems = input,"15",tag=搜索页·最多显示n条,desc=一次搜索最多给这么多条（默认 15）；数满后继续上滑不再加载新结果。与上面的相关性过滤联动＝先丢掉不相关的、再取前 n 条，所以实际条数可能不足 n。0 或留空=不限条数。换个词搜、或距上次搜索超过 10 分钟会自动重新计数
@@ -26,10 +25,11 @@ searchMinDur = input,"0",tag=搜索页·过滤<n秒的视频,desc=填秒数，�
 cleanMine = switch,true,tag=我的页·精简
 cleanSplash = switch,true,tag=开屏·广告列表清空
 displayUpList = select,"show","hide","auto",tag=动态·[最常访问]显示方式
-purifyComment = switch,true,tag=评论区·过滤置顶广告
+purifyComment = switch,true,tag=评论区·过滤置顶广告,desc=只管 UP 主置顶的那条恰饭评论 + 评论区顶部广告卡；评论列表本体不动
 optimizeRequest = switch,false,tag=评论区·加载优化
+cleanRelates = switch,true,tag=播放·清空推荐列表 (和'加载优化'冲突),desc=连正常视频推荐一起清空（关=仅去广告、保留推荐）
 sponsorBlock = switch,true,tag=播放·空降助手（跳过赞助段）
-logLevel = select,"error","warn","info","debug","off",tag=脚本日志等级
+logLevel = select,"debug","error","warn","info","off",tag=脚本日志等级,desc=TEMP 版默认 debug，日志里能看到 [SearchAll] N->M 过滤统计
 
 # ===== 网络层（无需 MITM）=====
 [Rule]
@@ -38,6 +38,15 @@ URL-REGEX,^http://[\d\.]+:8000/v1/resource/\w{32}-1-SPLASH,REJECT-DICT
 # cm.bilibili.com = 商业广告域名（/cm/api/fees/wise 广告调度、/cm/api/conversion 归因）；
 #   注：播放页可见的视频下广告是 protobuf 里的 cm 字段，由脚本删除，不靠这条。
 DOMAIN,cm.bilibili.com,REJECT
+
+# 广告「自动点击」用的第三方上报域名（`176_` 实测，纪录片详情页自动跳转的实锤）：
+#   时间线是 cm/api/fees/wise(广告调度) → ad/click(第三方点击上报) → cm/api/conversion/mobile/v2(归因)
+#   → cm/mgk/.../landing_pages(落地页) → 被推广的 App 被拉起。用户没点，它自己发的。
+#   ad-api.morefreegame.com/app/ad/click 带全套设备指纹（idfa_md5/caid/ad_creative_id，
+#   ad_channel=DSP_BILI_GMZZ_IOS_WD_21）；cid-click.smallfighter.com/cid/click 是另一个点击追踪。
+#   ⚠️ 这两条只是掐掉**上报**；卡片本身不渲染才是治本，靠 gRPC 脚本删广告模块。
+DOMAIN-SUFFIX,morefreegame.com,REJECT
+DOMAIN-SUFFIX,smallfighter.com,REJECT
 
 # ===== 脚本 =====
 [Script]
@@ -83,11 +92,27 @@ http-response ^https://api\.live\.bilibili\.com/xlive/(?:app-interface/v2/index/
 ^https://ap[ip]\.bilibili\.com/x/(?:resource/(?:top/activity|patch/tab(?:/v2)?)|v2/search/square|vip/ads/materials)\? mock-response-body data-type=text status-code=200 data="{"code":-404,"message":"-404","ttl":1,"data":null}"
 ^https://api\.bilibili\.com/pgc/activity/deliver/material/receive\? mock-response-body data-type=text status-code=200 data="{"code":0,"data":{"closeType":"close_win","container":[],"showTime":""},"message":"success"}"
 
+# ⭐ AIRelateAsync = 详情页「相关视频」的真正来源（`179_` 实测，2026-08-29）。它一个响应里装两样东西：
+#   · field 1 = 广告 bilibili.ad.v1.AdsControlDto，带 openapp.jdmobile/taobao/tmall/pinduoduo/
+#     vipshop/imeituan 的唤起白名单 → 能自动拉起购物 App（用户报的「自动跳转」多半是它）
+#   · field 2 = 121 KB 的相关视频列表（带「我不想看/不感兴趣」菜单的标准推荐卡）
+#   插件原先只处理 RelatesFeed（`179_` 里已被清成 21 B），内容却全走这条 → 列表照常出现。
+#   ⚠️ 恒开、不受 cleanRelates 控制：[Rewrite] 能否用 enable= 无官方依据（见 §13b），
+#      宁可用已验证的 mock 空帧。要恢复相关推荐就把这两条里的 AIRelateAsync 去掉。
 # gRPC mock（青少年弹窗 / 默认搜索 / TFInfo / 结束页 / 暂停页）
 ^https://grpc\.biliapi\.net/bilibili\.app\.interface\.v1\.Teenagers/ModeStatus$ mock-response-body data-type=text data="AAAAABMKEQgCEgl0ZWVuYWdlcnMgAioA" mock-data-is-base64=true
 ^https://grpc\.biliapi\.net/bilibili\.app\.interface\.v1\.Search/DefaultWords$ mock-response-body data-type=text data="AAAAACEaHeaQnOe0ouinhumikeOAgeeVquWJp+aIlnVw5Li7KAE=" mock-data-is-base64=true
-^https://grpc\.biliapi\.net/bilibili\.app\.(?:view\.v1\.View/TFInfo|viewunite\.v1\.View/(?:PlayPause|ViewEndPage))$ mock-response-body data-type=text data="AAAAAAA=" mock-data-is-base64=true
-^https://grpc\.biliapi\.net/bilibili\.app\.(?:interface\.v1\.(?:Teenagers/ModeStatus|Search/DefaultWords)|view\.v1\.View/TFInfo|viewunite\.v1\.View/ViewEndPage)$ response-header-add grpc-status 0
+^https://grpc\.biliapi\.net/bilibili\.app\.(?:view\.v1\.View/TFInfo|viewunite\.v1\.View/(?:PlayPause|ViewEndPage|AIRelateAsync))$ mock-response-body data-type=text data="AAAAAAA=" mock-data-is-base64=true
+^https://grpc\.biliapi\.net/bilibili\.app\.(?:interface\.v1\.(?:Teenagers/ModeStatus|Search/DefaultWords)|view\.v1\.View/TFInfo|viewunite\.v1\.View/(?:ViewEndPage|AIRelateAsync))$ response-header-add grpc-status 0
+
+# 详情页弹窗广告（`176_` 实测；纪录片/番剧这类 PGC 页最容易触发）
+#   · mall-dayu/muggle/iam = 会员购 in-app message，实测下发 maStyleType=COUPON_POPUP
+#     「新人专享10元现货运费券」整套弹窗数据 → reject 掉就没弹窗
+#   · x/vip/activity/popup/info = VIP 活动弹窗（`176_` 里恰好 data:null，但它就是弹窗数据源）
+#   · 配套的 VipRetentionPopupH5 / VipLoginPopupH5 / OgvVipBuyBase 是 s1.hdslb.com 上的静态 H5，
+#     不直接拦静态件（易误伤且随时改名），拦上面这两个下发数据的接口即可
+^https://mall\.bilibili\.com/mall-dayu/muggle/iam reject-dict
+^https://api\.bilibili\.com/x/vip/(?:activity/popup/info|gsm/activity/preload) reject-dict
 
 # 皮肤装扮广告位
 ^https://app\.bilibili\.com/x/resource/show/skin\? response-body-json-del data.common_equip
@@ -106,4 +131,6 @@ http-response ^https://api\.live\.bilibili\.com/xlive/(?:app-interface/v2/index/
 
 # ===== MITM =====
 [MITM]
-hostname = ap?.bilibili.com, app.biliapi.net, grpc.biliapi.net, api.live.bilibili.com, line3-h5-mobile-api.biligame.com, www.bilibili.com, m.bilibili.com, live.bilibili.com
+# ⚠️ mall.bilibili.com 是为了那条 mall-dayu/muggle/iam 弹窗规则加的——不 MITM 它，
+#    [Rewrite] 看不到 https 的路径，规则就是静默失效。只拦这一个路径，会员购其余功能不受影响。
+hostname = ap?.bilibili.com, app.biliapi.net, grpc.biliapi.net, api.live.bilibili.com, line3-h5-mobile-api.biligame.com, www.bilibili.com, m.bilibili.com, live.bilibili.com, mall.bilibili.com

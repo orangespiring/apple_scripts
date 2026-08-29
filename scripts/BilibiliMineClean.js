@@ -13,7 +13,16 @@
  */
 
 // 可配置：要删除的 data 顶层 key（中文版已验证，英文版同样适用）
-const DELETE_KEYS = ["rework_v1", "vip_section", "vip_section_v2"];
+// ⚠️ VIP 推广块的真实字段名是 modular_vip_section（`56_`(2026-06-15) 与 `176_`(2026-08-29) 抓包一致），
+//    内容就是「开通会员 / 更多独家内容 / 会员中心 → bilibili://overseas/vip-cashier」那条横幅。
+//    vip_section / vip_section_v2 这两个名字来自 linuszlx/Bili.js，**本账号的响应里从来没出现过** →
+//    这条清理一直是空转（不是 2026-08 的字段变更，是从一开始就没对上）。两个老名字保留着不删，
+//    别的账号/版本万一还在下发也能一并清掉，代价只是两次无害的 delete。
+const DELETE_KEYS = ["rework_v1", "modular_vip_section", "vip_section", "vip_section_v2"];
+
+// 与 modular_vip_section 配套的开关：光删数据不关它，App 可能照样按「用模块化 VIP 区」渲染出空块。
+// 置 false 让 App 走「不显示」分支；老字段没了也没有 vip_section 可回退，故不会退回旧样式。
+const USE_FLAG_KEY = "use_modular_vip_section";
 
 // 要跳过（删除）的 section 标题（中英文）
 const SKIP_TITLES = new Set([
@@ -45,6 +54,10 @@ function cleanMine(obj) {
   // 1) 删顶层广告/VIP key
   for (const k of DELETE_KEYS) {
     delete data[k];
+  }
+  // 配套开关：只在原本存在时改，不给没有这个字段的响应凭空加一个
+  if (Object.prototype.hasOwnProperty.call(data, USE_FLAG_KEY)) {
+    data[USE_FLAG_KEY] = false;
   }
 
   // 2) 清理 sections_v2

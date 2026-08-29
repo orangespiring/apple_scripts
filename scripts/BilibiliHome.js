@@ -107,7 +107,7 @@ function parseHomeMode() {
 // ⚠️ 只在 **homeShow=「过滤信息流」** 档生效（含其中的「每天推送(n)次」投放节奏）；「默认信息流」档一概不理。「改稍后再看」两档的卡片是脚本自己造的、
 //    是用户自己收藏的内容，不该拿广告/直播/竖屏这套去筛，故不参与。
 function parseFeedFilter(raw) {
-  const out = { ad: false, live: false, vertical: false, picture: false, minDur: 0, tagPrefix: false, slimTab: null, dailyPush: 0 };
+  const out = { ad: false, live: false, vertical: false, picture: false, ogv: false, minDur: 0, tagPrefix: false, slimTab: null, dailyPush: 0 };
   // 先去掉注释：每行里 // 或 # 之后的内容全部丢掉。默认值里就带一句「1=开 0=关」的提醒，
   // 不去注释的话「秒那项填秒数」这种说明文字会被当成配置项（含"秒"、没数字 → 误设成 1 秒）。
   const s = String(raw == null ? "" : raw)
@@ -126,6 +126,9 @@ function parseFeedFilter(raw) {
     else if (seg.indexOf("直播") >= 0) out.live = n > 0;
     else if (seg.indexOf("竖屏") >= 0 || /vertical/i.test(seg)) out.vertical = n > 0;
     else if (seg.indexOf("图文") >= 0) out.picture = n > 0;
+    // 番剧/纪录片/电影/电视剧 = OGV(PGC) 整类，这四个词任一都认（见 isOgvCard 的说明）
+    else if (seg.indexOf("番剧") >= 0 || seg.indexOf("纪录片") >= 0 || seg.indexOf("电影") >= 0
+             || seg.indexOf("电视剧") >= 0 || /ogv|pgc|bangumi/i.test(seg)) out.ogv = n > 0;
     else if (seg.indexOf("顶栏") >= 0 || /tab/i.test(seg)) out.slimTab = n > 0;   // 三态：1/0/缺席(null)
     else if (seg.indexOf("推送") >= 0 || seg.indexOf("每天") >= 0) out.dailyPush = n > 0 ? n : 0;  // 每天投放几次，0=不启用
     else if (seg.indexOf("标签") >= 0 || seg.indexOf("前缀") >= 0) out.tagPrefix = n > 0;
@@ -135,14 +138,32 @@ function parseFeedFilter(raw) {
 }
 
 // 判据全部来自 capture156 的原生 feed/index（column=4）实测：
-//   广告   → 带 ad_info 字段；card_type=cm_v2(card_goto=ad_av / ad_web_s) 与 banner_v8(card_goto=banner) 都属此类
+//   广告   → card_type=cm_v2(card_goto=ad_av / ad_web_s / ad_live_v2) 与 banner_v8(card_goto=banner) 都属此类
 //   直播   → card_goto/goto = "live"（card_type=small_cover_v9）
 //   图文   → card_goto/goto = "picture"（card_type=small_cover_v2，B 站的图文动态卡）
 //   竖屏   → goto = "vertical_av"（注意 card_goto 仍是 "av"，只看 card_goto 认不出来）
 //   时长   → player_args.duration（秒）；直播/图文卡没有这个字段 → 视为 0 = 不按时长丢
+//
+// ⚠️【2026-08-29 capture176 字段变更】ad_info 不再等于"这张卡是广告"。
+//    B 站现在给**自然卡**也挂一个 ad_info「广告位占位」对象——只有排期元数据、没有素材：
+//      {resource, source, request_id, index, is_ad_loc:true, card_index, client_ip}
+//    真广告的 ad_info 则额外带素材字段（is_ad / creative_id / ad_cb / creative_content /
+//    cm_mark / creative_type / creative_style / extra，12KB+）。
+//    老判据 `it.ad_info != null` 于是把占位当广告，**误杀正常视频/直播/图文卡**
+//    （capture176 实测 4 份 feed 共误杀 7 张，且每次都是第 1 张——首位就是广告位）。
+//    ⚠️ is_ad_loc 是"这个**位置**是广告位"，不是"这张**卡**是广告"，别拿它当判据。
+//    ⚠️ 也不能只认 is_ad：capture176 里有真广告只给 creative_id 不给 is_ad（cm_v2/ad_web_s）。
+//    改成只认「素材类字段」正向判定；banner_v8 两者都不给，仍靠下面 card_goto==="banner" 兜住。
+//    全量回归（HTTP_Capture 下所有 HAR 共 134 张卡）：新旧判据仅在上述 7 张占位卡上有差异，
+//    老抓包结果完全一致；且素材判据未多抓到任何 card_type/card_goto 漏掉的广告（它是纯兜底）。
+const AD_CREATIVE_KEYS = ["is_ad", "creative_id", "ad_cb", "creative_content"];
+function hasAdCreative(a) {
+  if (!a || typeof a !== "object") return false;
+  return AD_CREATIVE_KEYS.some((k) => a[k] != null && a[k] !== false);
+}
 function isAdCard(it) {
   if (!it) return false;
-  if (it.ad_info != null) return true;
+  if (hasAdCreative(it.ad_info)) return true;
   const cg = String(it.card_goto || ""), ct = String(it.card_type || "");
   return cg.indexOf("ad") === 0 || ct.indexOf("cm") === 0 || cg === "banner";
 }
@@ -154,6 +175,19 @@ function isVerticalCard(it) {
 }
 function isPictureCard(it) {
   return String((it && it.card_goto) || "") === "picture" || String((it && it.goto) || "") === "picture";
+}
+// OGV = B 站的 PGC 内容：番剧 / 纪录片 / 电影 / 电视剧，`176_` 实测形如
+//   card_type="ogv_small_cover"  card_goto="bangumi"  goto="bangumi"
+//   args={up_id,up_name:"哔哩哔哩纪录片",aid,ip_id}  uri=".../bangumi/play/ep517745"
+// ⚠️ 这类卡**没有 args.tname、也没有 player_args** → 标签前缀 / tag 屏蔽词 / 时长下限对它一概不生效，
+//    所以在此之前它是唯一漏网的卡类（139 张卡的全量普查：av/广告/直播/图文/竖屏都有开关，只有它没有）。
+// ⚠️ **无法只滤「纪录片」而放行「番剧」**：结构上只有 bangumi 这一个类别标记，子类型没有独立字段
+//    （类别名只出现在 talk_back 这种无障碍朗读串里，靠它匹配太脆）。要精确到纪录片，用 homeBlockWords
+//    写 up:哔哩哔哩纪录片 —— UP 名是实打实的字段，已在 cardTexts 里参与匹配。
+function isOgvCard(it) {
+  const cg = String((it && it.card_goto) || ""), g = String((it && it.goto) || "");
+  const ct = String((it && it.card_type) || "");
+  return cg === "bangumi" || g === "bangumi" || ct.indexOf("ogv") === 0;
 }
 function cardDuration(it) {
   const pa = (it && it.player_args) || {};
@@ -188,11 +222,20 @@ function parseBlockWords(raw) {
 }
 const bwEmpty = (bw) => !bw || !(bw.any.length || bw.up.length || bw.tag.length || bw.title.length);
 
+// ⚠️【2026-08-29 capture176 新增字段】translated_title / translated_status
+//    本机 App locale=en，B 站现在会把中文标题机翻一份下发：
+//      title="职业选手的大后期女娲到底有多恐怖？"
+//      translated_title="How terrifying is a pro player's endgame Nuwa?"  translated_status="TRANSLATED"
+//    （capture176 的 81 张卡里 22 张带；156/160 一张都没有 → 确认是新字段。）
+//    App 显示的是译文，所以两处都得跟上：这里把译文并进标题干草堆（用户照屏幕上的英文写
+//    屏蔽词也要能命中；原中文标题还在，中文词照旧命中），以及 injectTagPrefix 两个标题都要加前缀。
+const TITLE_FIELDS = ["title", "translated_title"];
 function cardTexts(it) {
   const a = (it && it.args) || {};
+  const up = (it && it.up) || {};   // items.up 也是 176 新增，目前只在广告卡上见过，留作兜底
   return {
-    title: String((it && it.title) || "").toLowerCase(),
-    up: String(a.up_name || (it && it.desc_button && it.desc_button.text) || "").toLowerCase(),
+    title: TITLE_FIELDS.map((k) => String((it && it[k]) || "")).join("\n").toLowerCase(),
+    up: String(a.up_name || up.name || (it && it.desc_button && it.desc_button.text) || "").toLowerCase(),
     tag: String(a.tname || "").toLowerCase(),
   };
 }
@@ -207,31 +250,40 @@ function hitsBlockWords(it, bw) {
 // 标题前缀注入：「[话题] 原标题」，参考 XHSClean 的 injectTitlePrefix。
 // 不截断（B 站标题本来就由服务端给定，App 自己会按行数截显示）；已带前缀的不重复加 →
 // 「每天推送(n)次」缓存里存的是注入后的卡，冷启动回放会再过一次，靠这个判断保持幂等。
+// ⚠️ title 与 translated_title 都要加：locale=en 时 App 渲染的是 translated_title，
+//    只加 title 的话前缀在屏幕上根本不出现（见上方 TITLE_FIELDS 处的字段说明）。
 function injectTagPrefix(items) {
   let n = 0;
   (items || []).forEach((it) => {
     const tag = it && it.args && it.args.tname;
     if (!tag || !it.title) return;
     const prefix = "[" + tag + "] ";
-    if (it.title.indexOf(prefix) === 0) return;
-    it.title = prefix + it.title;
-    n++;
+    let changed = false;
+    TITLE_FIELDS.forEach((k) => {
+      const v = it[k];
+      if (typeof v !== "string" || !v) return;
+      if (v.indexOf(prefix) === 0) return;  // 已带前缀 → 幂等跳过（缓存回放会再过一遍）
+      it[k] = prefix + v;
+      changed = true;
+    });
+    if (changed) n++;
   });
   return n;
 }
 
 // 按 homeFeedFilter 过滤一批原生卡片；返回 {items, dropped:{ad,live,vertical,dur}}
 function filterNativeItems(items, ff, bw) {
-  const anyRule = ff && (ff.ad || ff.live || ff.vertical || ff.picture || ff.minDur || ff.tagPrefix);
+  const anyRule = ff && (ff.ad || ff.live || ff.vertical || ff.picture || ff.ogv || ff.minDur || ff.tagPrefix);
   if (!Array.isArray(items) || (!anyRule && bwEmpty(bw))) {
     return { items: items || [], dropped: null };
   }
-  const d = { ad: 0, live: 0, vertical: 0, picture: 0, dur: 0, word: 0, tagged: 0 };
+  const d = { ad: 0, live: 0, vertical: 0, picture: 0, ogv: 0, dur: 0, word: 0, tagged: 0 };
   const kept = items.filter((it) => {
     if (ff.ad && isAdCard(it)) { d.ad++; return false; }
     if (ff.live && isLiveCard(it)) { d.live++; return false; }
     if (ff.vertical && isVerticalCard(it)) { d.vertical++; return false; }
     if (ff.picture && isPictureCard(it)) { d.picture++; return false; }
+    if (ff.ogv && isOgvCard(it)) { d.ogv++; return false; }
     if (ff.minDur > 0) { const sec = cardDuration(it); if (sec > 0 && sec < ff.minDur) { d.dur++; return false; } }
     if (hitsBlockWords(it, bw)) { d.word++; return false; } // ⚠️ 必须在注入前缀之前判，否则 title: 规则会撞上注入的 [话题]
     return true;
@@ -239,7 +291,7 @@ function filterNativeItems(items, ff, bw) {
   if (ff.tagPrefix) d.tagged = injectTagPrefix(kept);
   return { items: kept, dropped: d };
 }
-const ffLog = (d) => d ? ("广告" + d.ad + "/直播" + d.live + "/竖屏" + d.vertical + "/图文" + d.picture + "/短片" + d.dur
+const ffLog = (d) => d ? ("广告" + d.ad + "/直播" + d.live + "/竖屏" + d.vertical + "/图文" + d.picture + "/番剧" + d.ogv + "/短片" + d.dur
   + "/屏蔽词" + d.word + "·加前缀" + d.tagged) : "未启用";
 
 // —— 紧凑 md5（Joseph Myers 实现，UTF-8 安全）——
@@ -670,7 +722,7 @@ function handleTab() {
       return;
     }
     // 全不过滤 → 零成本放行；否则只删卡、其余原样（不动 config/顺序）
-    if (!ff.ad && !ff.live && !ff.vertical && !ff.picture && !ff.minDur && !ff.tagPrefix && bwEmpty(bw)) {
+    if (!ff.ad && !ff.live && !ff.vertical && !ff.picture && !ff.ogv && !ff.minDur && !ff.tagPrefix && bwEmpty(bw)) {
       LOG("mode=过滤信息流·各项均未启用·原样放行");
       $done({});
       return;
