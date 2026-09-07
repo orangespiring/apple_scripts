@@ -1,5 +1,5 @@
 #!name = 小红书净化
-#!desc = 首页信息流过滤, 首页Tab可编辑, 同城净化, 复制下载解锁, 视频流阻止下滑
+#!desc = 首页信息流过滤, 首页Tab可编辑, 同城净化, 复制下载解锁, 视频流阻止下滑, 预取短路, 广告埋点拦截
 #!icon = https://raw.githubusercontent.com/luestr/IconResource/main/App_icon/120px/RedPaper.png
 
 # 小红书净化 — Loon
@@ -19,6 +19,9 @@ filterVideo = switch,true,tag=首页·过滤视频卡片
 blockFeedCards = select,"热点和直播","直播","热点","都不过滤",tag=首页·过滤热点与直播
 blockVideoScroll = switch,true,tag=视频流·阻止下滑下一个
 filterLocalfeedExhausted = switch,true,tag=同城·丢弃非同城内容
+# 笔记详情预取(detailfeed/preload)：三份 HAR 实测 19 次 / 线上真实约 100KB / 平均 wait 328ms，
+# 纯粹为了「点开秒开」。关掉后点开笔记退回走 imagefeed 实拉，首屏多约 400ms。
+blockPreload = switch,true,tag=省流量·短路笔记预取(点开略慢)
 
 # ===== 脚本 =====
 
@@ -42,10 +45,58 @@ http-request ^https?://edith\.(?:xiaohongshu|rnote)\.com/api/sns/v\d+/note/image
 http-response ^https?://edith\.(?:xiaohongshu|rnote)\.com/api/sns/v\d+/note/imagefeed script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/XHSClean.js, requires-body=1, tag=XHS-笔记解锁
 
 # 视频流 — 解除限制 + 阻止下滑
-http-request ^https?://rec\.(?:xiaohongshu|rnote)\.com/api/sns/v\d+/note/videofeed\? script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/XHSClean.js, tag=XHS-视频流请求-gzip
+# ⭐ 请求阶段这条现在有两个职责：首屏请求强制 gzip；【翻页】请求直接短路不发上游。
+#    翻页响应本来就会被响应脚本整批清成 data:[]，等于完整下完再全丢 ——
+#    实测翻页 3 次 = 线上真实 66,153 B（_loon.downloadSize）纯浪费。短路后 App 表现完全不变。
+#    ✅ 200 抓包真机验证：7 条翻页全部 serverIPAddress 为空、downloadSize=63 = 确实没发上游；
+#       2 条首屏正确放行。判据在真机上站得住。
+#    所以这条要传 blockVideoScroll（关掉开关时不短路，回到纯 gzip 行为）。
+http-request ^https?://rec\.(?:xiaohongshu|rnote)\.com/api/sns/v\d+/note/videofeed\? script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/XHSClean.js, argument=[{blockVideoScroll}], tag=XHS-视频流请求-gzip
 http-response ^https?://rec\.(?:xiaohongshu|rnote)\.com/api/sns/v\d+/note/videofeed\? script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/XHSClean.js, requires-body=1, argument=[{blockVideoScroll}], tag=XHS-视频流解锁
 
-# ===== 商城/广告域名（连接层拒绝）=====
+# 笔记详情预取 — 请求阶段直接短路，不发上游（19 次 / 线上真实约 100KB / 平均 wait 328ms）
+# ✅ 200 抓包真机验证：serverIPAddress 为空、downloadSize=63 = 确实没发上游
+# ⚠️ 这里【不能】用 [Rewrite] mock-response-body：mock 是静态规则、读不到 $argument，
+#    要保留 blockPreload 开关就只能走请求阶段脚本 $done({response})。
+http-request ^https?://edith\.(?:xiaohongshu|rnote)\.com/api/sns/v\d+/note/detailfeed/preload script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/XHSClean.js, argument=[{blockPreload}], tag=XHS-预取短路
+
+# ===== 埋点/广告端点（路径级，域名上跑着业务不能整个拦）=====
+#
+#  ⭐ 为什么用 mock-response-body 而不是 reject-dict：reject-dict 只回 {}，
+#     而这些端点的真实响应带 success:true / result:0；三份 HAR 已经把每个的确切 body
+#     抓到手了，原样回填零形状风险，成本只有几十字节。
+#     （两步路当初用 reject-dict 是因为不知道 body，这里知道，就别退而求其次。）
+#  ⚠️ 正则里绝不能出现字面空格 —— [Rewrite] 按空格劈「URL / 动作」，劈错整条静默失效。
+#  ⚠️ 这些 host 绝不能在 [Rule] 里域名级 REJECT：连接层拒绝发生在 MITM/重写之前，
+#     一旦域名被 REJECT，下面的 mock 永远没机会执行。
+
+[Rewrite]
+
+# ---- edith：行为埋点 / 设备上报 ----
+# metrics_report 是请求数最多的一条（三份 HAR 36 次，上行 22,710B）
+^https?://edith\.(?:xiaohongshu|rnote)\.com/api/sns/v\d+/note/metrics_report mock-response-body data-type=json status-code=200 data="{"code":0,"success":true,"msg":"成功","data":{"success":true}}"
+^https?://edith\.(?:xiaohongshu|rnote)\.com/api/sns/v\d+/note/video_played mock-response-body data-type=json status-code=200 data="{"success":true,"msg":"成功","data":{},"code":0}"
+# ⚠️ 锚死 /videofeed/exit，别和上面 XHS-视频流解锁 的 videofeed\? 撞上（那条靠结尾 \? 规避 exit）
+^https?://edith\.(?:xiaohongshu|rnote)\.com/api/sns/v\d+/note/videofeed/exit mock-response-body data-type=json status-code=200 data="{"code":0,"success":true,"msg":"成功","data":{}}"
+^https?://edith\.(?:xiaohongshu|rnote)\.com/api/sns/v\d+/system_service/device_params_info mock-response-body data-type=json status-code=200 data="{"result":0,"success":true,"msg":"ok"}"
+^https?://edith\.(?:xiaohongshu|rnote)\.com/api/usergrowth/behavior/report mock-response-body data-type=json status-code=200 data="{"code":0,"success":true,"msg":"成功","data":{"response":{"success":true}}}"
+
+# ---- edith：广告位 ----
+^https?://edith\.(?:xiaohongshu|rnote)\.com/api/sns/v\d+/ads/resource mock-response-body data-type=json status-code=200 data="{"code":0,"success":true,"msg":"成功","data":[]}"
+^https?://edith\.(?:xiaohongshu|rnote)\.com/api/sns/v\d+/system_service/splash_async_optimization mock-response-body data-type=json status-code=200 data="{"code":0,"success":true,"msg":"成功","data":{"track_url":"","ads_id":"-1","track_id":"","request_id":""}}"
+
+# ---- www：ASA 归因 / 广告互动 / 设备上报 ----
+^https?://www\.(?:xiaohongshu|rnote)\.com/api/sns/v\d+/tag/ads_engage mock-response-body data-type=json status-code=200 data="{"data":{"type":-1,"forward":""},"result":0,"success":true,"msg":"ok"}"
+^https?://www\.(?:xiaohongshu|rnote)\.com/api/sns/v\d+/ads/apple/record mock-response-body data-type=json status-code=200 data="{"result":0,"success":true,"msg":"ok"}"
+^https?://www\.(?:xiaohongshu|rnote)\.com/api/sns/v\d+/system_service/update_device mock-response-body data-type=json status-code=200 data="{"result":0,"success":true,"msg":"ok"}"
+
+# ---- ⚠️ 出问题第一个删这条 ----
+# splash_config 的真实响应形状复杂（bidding_ads / ads_groups / show_queue / queue_key），
+# 而且本次抓包里 ads 已经是空的 —— 收益低（5 次 / 15KB）、形状风险高。
+# 开屏出现异常（白屏/卡住/反复请求）先注释掉它再排查别的。
+^https?://edith\.(?:xiaohongshu|rnote)\.com/api/sns/v\d+/system_service/splash_config mock-response-body data-type=json status-code=200 data="{"code":0,"success":true,"msg":"成功","data":{"min_interval":1800000,"request_id":"","bidding_ads":[],"ads_groups":[]}}"
+
+# ===== 商城/广告/埋点域名（连接层拒绝）=====
 
 [Rule]
 
@@ -53,9 +104,39 @@ DOMAIN,mall.xiaohongshu.com,REJECT
 DOMAIN,mall.rnote.com,REJECT
 DOMAIN-SUFFIX,admobile.top,REJECT
 
+# --- 纯埋点 host（三份 HAR 实测：161 次请求 = 15.8%，上行 1,192,753B = 77.7%，下行合计仅 6.5KB）---
+# 响应体一律 {"code":0,"msg":"Success","success":true}，零功能负载。
+# ⚠️ 抓包全是 Google 账号（rnote）。国内账号侧的 *.xiaohongshu.com 未在抓包中出现，
+#    按同构命名一并写上；写错也只是不命中，无副作用。
+DOMAIN,t2.rnote.com,REJECT
+DOMAIN,t2.xiaohongshu.com,REJECT
+DOMAIN,lng.rnote.com,REJECT
+DOMAIN,lng.xiaohongshu.com,REJECT
+DOMAIN,apm-native.rnote.com,REJECT
+DOMAIN,apm-native.xiaohongshu.com,REJECT
+DOMAIN,crash.rnote.com,REJECT
+DOMAIN,crash.xiaohongshu.com,REJECT
+
+# --- 观察期，暂不启用 ---
+# spider-tracker 是反爬/设备指纹上报（24 次 / 上行 25KB / 下行仅 984B / 平均 wait 838ms，
+# 全场最慢之一）。纯上报没有功能负载，但属于风控链路，拦掉理论上可能触发风控。
+# 确认长期无副作用后再取消注释。
+# DOMAIN,spider-tracker.xiaohongshu.com,REJECT
+# DOMAIN,spider-tracker.rnote.com,REJECT
+
+# --- ⛔ 以下明确不能碰（抓包实证，别手贱）---
+# as.rnote.com          反作弊指纹，/api/v1/cfg/ios 返回 42KB 加密有效载荷，App 要解密用
+# gslb.rnote.com        GSLB
+# mediacloud.xiaohongshu.com / 119.29.29.88   HTTPDNS，拦了降级 CDN 选路
+# www.askdiandian.com   全场最慢(平均 1970ms)但提供聊天记录与封禁查询，不是纯埋点
+# edith 上的 v2/system_service/config(冷启动 2.06MB!) / v3/system_service/flag_exp /
+#   api/capa/configlist —— 驱动底栏 tab 与发布 UI，体量最大但绝不可拦
+
 # ===== MITM =====
 # 国内账号走 *.xiaohongshu.com；Google/海外账号登录后 App 整体切到 *.rnote.com（RedNote），
 # 接口路径完全相同，只有 host 变了 —— 两套都要 MITM + 正则兼容，否则静默失效。
 
+# www.* 是 [Rewrite] 里 ads_engage / ads/apple/record / update_device 三条要用的，
+# 不加进 MITM 那三条静默不生效。
 [MITM]
-hostname = rec.xiaohongshu.com, edith.xiaohongshu.com, rec.rnote.com, edith.rnote.com
+hostname = rec.xiaohongshu.com, edith.xiaohongshu.com, www.xiaohongshu.com, rec.rnote.com, edith.rnote.com, www.rnote.com

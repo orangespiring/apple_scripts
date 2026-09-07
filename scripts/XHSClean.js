@@ -193,9 +193,24 @@ var UNFIX_HOMEFEED_TABS = true;
 // 现由 Loon [Argument] switch 参数 filterLocalfeedExhausted 注入（默认开）。
 var FILTER_LOCALFEED_EXHAUSTED = parseSwitch('filterLocalfeedExhausted', true);
 
+// 【短路笔记详情预取】detailfeed/preload 是 feed 驱动的预取：每批 homefeed/localfeed 响应之后
+// 约 600ms 必跟一次 POST，请求体带一批 note id，响应 data.preload_map 是 10 条左右笔记的
+// images_list/desc/counts —— 唯一用途是让点开笔记「秒开」。
+//   ⭐ 三份 HAR 实测：19 次请求 / **线上真实 100,802 B**（content.size 是 596,544，那是解压后的，
+//      算省流量一律看 _loon.downloadSize）/ 平均 wait 328ms，
+//      是整个方案里唯一「输出与服务器返回什么无关」且体量可观的接口（永远回空 map 即可）。
+//   代价：点开笔记退回走 imagefeed 实拉，首屏多约 400ms。imagefeed 本来就挂着
+//        「XHS-笔记解锁」，链路是通的，复制/下载解锁不受影响。
+// 现由 Loon [Argument] switch 参数 blockPreload 注入（默认开）。
+//
+// ⚠️ 为什么不用 [Rewrite] mock-response-body：mock 是静态规则，**读不到 $argument**
+//    （argument= 只能挂在 script-path 上）。要保留开关就只能走请求阶段脚本短路。
+var BLOCK_PRELOAD = parseSwitch('blockPreload', true);
+
 // ============================================================================
 //  以下为逻辑，一般不用改
 // ============================================================================
+//  detailfeed/preload (request)    → 直接短路回空 preload_map，不发上游（省 ~31KB/次）
 //  homefeed (request)              → 强制 Accept-Encoding: gzip（默认 br，QX 不解 br）
 //  homefeed (response)             → 删视频/黑名单分类 + 可选给标题注入 [分类]
 //  homefeed/categories (response)  → 把固定 tab 的 fixed 改 false，变成可编辑
@@ -233,8 +248,18 @@ function logFail(e) {
 }
 
 if (typeof $response === 'undefined') {
-  // ── 请求阶段：homefeed / categories / localfeed / imagefeed / videofeed 强制 gzip ──
-  forceGzip();
+  // ── 请求阶段 ──
+  // ⚠️ 这个分支里要再按 path 分一次：preload 是请求阶段，但它**不该**走 forceGzip
+  //    （我们压根不让它发出去，改 Accept-Encoding 没有意义）。别把它加到文件末尾那条
+  //    兜底 else 上——那条是响应阶段 cleanNoteDetail() 的入口。
+  if (/\/note\/detailfeed\/preload(\?|$)/.test(url)) {
+    blockPreload();
+  } else if (/\/note\/videofeed(\?|$)/.test(url) && BLOCK_VIDEO_SCROLL && isVideofeedPaging(url)) {
+    blockVideofeedPaging();
+  } else {
+    // homefeed / categories / localfeed / imagefeed / videofeed 强制 gzip
+    forceGzip();
+  }
 } else if (/\/homefeed\/categories(\?|$)/.test(url)) {
   unfixCategories();
 } else if (/\/homefeed(\?|$)/.test(url)) {
@@ -244,6 +269,75 @@ if (typeof $response === 'undefined') {
 } else {
   // imagefeed / videofeed → 笔记详情净化
   cleanNoteDetail();
+}
+
+// ─── 请求阶段：短路笔记详情预取 ───────────────────────────────────────────────
+// 在请求阶段直接 $done({response}) = Loon 不发上游、把这个响应交给 App。
+// 这是「省流量」与「可配开关」唯一能兼得的写法（mock-response-body 读不到 $argument）。
+//
+// ⚠️ 失败模式是安全的：万一 Loon 忽略 response 键，请求照常走上游 —— 只是没省到流量，不会挂。
+//    真机判据看 HAR 里这条的 _loon.downloadSize 与 serverIPAddress：真短路时是 0 和空。
+function blockPreload() {
+  if (!BLOCK_PRELOAD) {
+    logXHS('预取 ' + shortPath(url) + ' 功能关闭，原样放行');
+    $done({});
+    return;
+  }
+  logXHS('预取 ' + shortPath(url) + ' → 已短路，回空 preload_map（不发上游）');
+  $done({
+    response: {
+      status: 200,
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: '{"code":0,"success":true,"msg":"成功","data":{"preload_map":{}}}'
+    }
+  });
+}
+
+// ─── 请求阶段：短路视频流的「翻页」请求 ───────────────────────────────────────
+// videofeed 有两种请求，一条正则罩着，但性质完全相反：
+//   ① 首屏（你点开一个视频）→ 响应里有 source_note===true 那条 = 你要看的内容，**必须走真实响应**
+//   ② 翻页（下滑要下一个）  → 整批都是推荐项，响应脚本一律清成 data:[]
+// ②【输出与服务器返回什么无关】→ 符合 mock 判据，可以在请求阶段直接短路，不发上游。
+//
+// ⭐ 129/126/127 实测（按 _loon.downloadSize 线上真实字节）：翻页 3 次 = 线上真实 66,153 B，
+//    这些字节现在是**完整下完再整批丢掉**。短路后 App 行为完全不变（还是那张空白页），
+//    只是不再为它付流量和等待 —— 正是 CLAUDE.md「省流量与净化兼得」那一栏。
+//
+// 判据（按 URL，请求阶段只有 URL 可用）：
+//   • source=explore_feed → 看有没有 cursor_score 查询参数。REFERENCE 第 4 条已记载
+//     「翻页由 cursor_score 驱动，App 拿上一批最后一条的 cursor_score 当下次请求参数」，
+//     所以这是机制而不是巧合。抓包 6 条 explore_feed 里 4 条首屏全无此参数、2 条翻页全有。
+//   • source=search   → 差别在 search_extra_params 这个 URL 编码的 JSON 里（首屏 page=1，
+//     翻页 page=2）。用 JSON.parse 取，**不要用正则去啃**（键序没有保证）。
+//
+// ⚠️ 残留风险与兜底：万一哪天首屏也带上 cursor_score，会被误判成翻页 → 点开视频出空白页。
+//    但这个失败是**可恢复且症状已知**的（退出去重新点一次就是不带 cursor_score 的新请求），
+//    和现在下滑出空白页是同一种表现；真出问题就把 blockVideoScroll 关掉。
+//    两个判据都取不到时**一律不短路**，宁可照旧下完再丢，也不能把首屏搞挂。
+function isVideofeedPaging(u) {
+  // ① explore_feed：cursor_score 非空即为翻页
+  var cs = getQueryParam(u, 'cursor_score');
+  if (cs) return true;
+  // ② search：search_extra_params 里的 page > 1
+  var raw = getQueryParam(u, 'search_extra_params');
+  if (raw) {
+    try {
+      var p = JSON.parse(raw);
+      if (p && typeof p.page === 'number' && p.page > 1) return true;
+    } catch (e) { /* 解析不了就当首屏，不短路 */ }
+  }
+  return false;
+}
+
+function blockVideofeedPaging() {
+  logXHS('视频流 翻页请求 → 已短路，回空 data（不发上游，省约 90KB/次）');
+  $done({
+    response: {
+      status: 200,
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: '{"code":0,"success":true,"msg":"成功","data":[]}'
+    }
+  });
 }
 
 // ─── 请求阶段：去掉 br，强制 gzip ─────────────────────────────────────────────
