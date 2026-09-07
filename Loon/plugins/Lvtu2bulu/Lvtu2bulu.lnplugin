@@ -1,80 +1,176 @@
 #!name = 两步路户外助手净化
-#!desc = 首页+搜索+我的页净化, 广告锁空, 商城/广告SDK reject @orangespiring
+#!desc = 适配 9.2.3：首页/活动/线路净化, 广告总开关关停, 开屏弹窗锁空, TopOn广告SDK与埋点 reject @orangespiring
+#!author = @orangespiring
 #!icon = https://raw.githubusercontent.com/luestr/IconResource/main/App_icon/120px/2bulu.png
+#!openUrl = https://apps.apple.com/app/id646277024
+#!tag = 去广告
+#!homepage = https://github.com/orangespiring
+#!date = 2026-09-07
 
 # 两步路户外助手净化 — Loon
 # 本插件主要为自用，不接受功能性修改。规则参考 fmz200/wool_scripts 与 blackmatrix7/ios_rule_script
+#
+# ★ 与其他两步路插件（kelee / zirawell / fmz200，清一色 reject）的根本区别：
+#   两步路在「响应非法」或「列表为空」时会回退渲染磁盘缓存，reject-200 的 0 字节同样不覆盖缓存。
+#   本插件走脚本注入【合法且长度 ≥1】的 JSON 来强制重写旧缓存，净化后不会再冒出旧内容。
+#   所以广告/内容接口大多走 [Script] 而不是 [Rewrite] reject。
+#
+# ⚠️ saas-h5.2bulu.com/helperapi/* 是 helper.2bulu.com 的完整代理，只锚 helper 的正则会被整体绕过，
+#    因此下面所有业务正则都写成 (?:helper|saas-h5) + 可选的 helperapi 前缀。
+#
+# ⚠️ 与其他去广告合集共存时：Loon 语义是同 URL 链式执行、[Plugin] 里靠后者赢，
+#    本插件要排在冲突合集（如 kelee BlockAdvertisers）之后。
 
-# ===== 首页 =====
-
+# ============================================================
 [Script]
+# ============================================================
 
-# 顶部图标(动态/赛事等) → appTopNavModuleInfos=[]
-http-response ^https?://helper\.2bulu\.com/app/getTopNavModuleNew script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-顶部图标
+# ---------- 首页 ----------
 
-# 子 tab → 只留「推荐」
-http-response ^https?://helper\.2bulu\.com/app/getNavigationBar script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-子tab
+# 子 tab（关注/在路上/同城/搭子/赛事/保险/旅行）→ 只留「在路上」「关注」，清红点
+http-response ^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?v9/home/getNavigationBar script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-子tab
 
-# 运营模块卡片 → modules=[]
-http-response ^https?://helper\.2bulu\.com/outing/reqIndex\? script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-运营卡片
+# ---------- 广告 ----------
 
-# 推荐流 → 文字替换
-http-response ^https?://helper\.2bulu\.com/dynamic/recommandDynamicList script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-推荐流
+# ★ 广告总开关：splashAd.on / interstitialAd.on / hotStart.on 全关，比 reject 各端点干净
+http-response ^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?adConfig/get script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-广告总开关
 
-# 关注流 → data=[]
-http-response ^https?://helper\.2bulu\.com/feed/list script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-关注流
+# ---------- 活动 tab ----------
 
-# 本地/发现 → 注入诗词
-http-response ^https?://helper\.2bulu\.com/outing/reqFoundNewList script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-发现诗词
+# ---------- 线路频道（9.2.3 新增）----------
 
-# 入口配置 → configData="{}"
-http-response ^https?://helper\.2bulu\.com/getAppEntranceConfig script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-入口配置
+# ---------- 入口配置 / 专区 / 任务 ----------
 
-http-response ^https?://helper\.2bulu\.com/proSpecial/allData script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-proSpecial
+# ⚠️ 只删广告键，保留 tiandiAppkey（天地图）/ recordKalmanFilter / availableTrackFilter 等功能参数
+http-response ^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?getAppEntranceConfig script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-入口配置
 
-http-response ^https?://helper\.2bulu\.com/greenPea/queryTasks script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-greenPea
+# ---------- 搜索 / 我的页 ----------
 
-# ===== 活动 =====
+# 热力图页 → 只清 tipText 推广文案（免费额度等真实状态保留，故不能整条 mock）
+http-response ^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?v9/heatmap/info script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-热力图文案
 
-http-response ^https?://helper\.2bulu\.com/outing/reqOutingIndex\? script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-活动模块
+# 离线地图包 → 只清每个包的 hintText 角标（价格与 vipBadge 不动）
+http-response ^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?mapSource/offlineAreaPack script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-离线包文案
 
-http-response ^https?://helper\.2bulu\.com/outing/reqAroundBusiOutingBriefInfoList script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-活动列表
+http-response ^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?promote/getAppUserModule script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-我的页
 
-# ===== 搜索 =====
-
-http-response ^https?://helper\.2bulu\.com/app/getSearchPromptWords script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-搜索提示词
-
-http-response ^https?://helper\.2bulu\.com/app/getRecommendWords script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-推荐词
-
-http-response ^https?://helper\.2bulu\.com/search/searchHotKeyList script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-热搜列表
-
-# ===== 我的页 =====
-
-http-response ^https?://helper\.2bulu\.com/promote/getAppUserModule script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-我的页
-
-# ===== 广告接口 =====
-
-http-response ^https?://helper\.2bulu\.com/advert/getAllAdInfo script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-广告信息
-
-http-response ^https?://helper\.2bulu\.com/advert/getAdInfo script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/Lvtu2buluClean.js, requires-body=1, tag=2bulu-广告详情
-
-# ===== 重写 =====
-
+# ============================================================
 [Rewrite]
+# ============================================================
 
-# 弹窗/开屏/活动
-^https?://helper\.2bulu\.com/getSplash reject-200
-^https?://helper\.2bulu\.com/getPopInfo reject-200
-^https?://helper\.2bulu\.com/adActivity reject-200
+# ============================================================
+#  ★ mock-response-body：不发上游请求 + 直接返回合法 JSON
+# ============================================================
+#  这是「省流量」与「覆盖旧缓存」唯一能兼得的手段：
+#    reject / reject-200 → 0 字节，App 当失败 → 保留旧缓存（净化失效）
+#    http-response 脚本  → 完整 body 照常下载完才改写（流量一点不省）
+#    mock-response-body  → 本地直接返回指定 JSON，两头都占
+#  只有「输出与服务器返回什么无关」的接口能这么干；需要读真实响应才能保住
+#  功能字段的（getAppEntranceConfig / getNavigationBar / getAppUserModule /
+#  reqOutingIndex 若要留真实赛事）不行。
+#
+#  ⚠️ 下面的 [Script] 规则【保留】作兜底：万一 mock 规则没命中（正则漏、
+#     Loon 版本行为不同），脚本仍会改写。脚本对 mock 输出是幂等的，两层并存无副作用。
+#     真机确认 mock 生效后可以再精简。
+
+# ---- 活动列表（本次抓包 118KB）----
+^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?outing/req(?:OutingIndexOutingInfoList|IndexOutingBriefInfoList|AroundBusiOutingBriefInfoList|AroundHotRecomendMateOutingInfoList|BusiOutingBriefInfoList) mock-response-body data-type=json status-code=200 data="{"errCode":"0","outings":[{"outingId":900000000,"outingName":"","initiatorInfo":{"userId":"0","nickName":"","avatarUrl":"","headWidgetPicId":null,"userName":"","sourceType":0,"gender":0,"userSettingInfo":{"authentication":{"status":-1,"score":0,"scheduleScore":0,"serviceScore":0,"level":0,"type":1,"appraiseNum":0,"satisfaction":100,"stateExt":0,"qualityGuaranteeDepositFlag":0}},"level":1,"signature":null,"vipLevel":null,"membershipType":null,"is_real_name":null},"startAddress":"","startAddressId":"","destination":"","destinationCityIds":[],"state":0,"checkState":2,"refuseReason":null,"type":[1],"sourceType":0,"startTime":0,"endTime":0,"coverUrl":"","maxJoinNum":0,"currentJoinNum":0,"recommendedState":0,"browseCount":0,"myRole":0,"signUpNum":0,"isOfficial":false,"issueTime":0,"isInsurance":0,"insuranceMode":1,"isAppraise":false,"outingAppraiseBaseInfo":{"score":0,"scheduleScore":0,"serviceScore":0,"appraiseNum":0},"canAppraise":false,"days":1,"browseNum":0,"isMoreTime":0,"isClaim":0,"isFarious":0,"cost":"0.0","activityFee":null,"latelyValidCost":"0","workArticleWriteUrl":null,"workArticleState":0,"workArticleNum":0,"workArticleList":null,"stopInsuranceTime":null,"topType":0,"options":null,"outingInsuranceInfo":null,"leaderUserId":null,"commission":null,"minPrice":0,"maxPrice":0,"suitablePeple":null,"outingDateSimpleInfos":[],"totalNum":0,"isCluste":0,"originalCost":null,"remainingTime":null,"isCountdown":0,"dateInfo":null,"promotionalTips":null,"promotion":null,"explosionVo":null,"offLineSignUpNum":0,"involvedOnlinePersonNum":0,"sites":[],"isShowExplosionVo":false,"outingTimeZone":"GMT+8:00","minJoinNum":0,"outingMemberList":null,"insuranceAutoBuy":0,"insuranceAutoBuyByMember":0,"miniSourceId":"","miniPath":"","endApplyTime":null,"hasTrack":null,"hasJoin":null,"routeId":null,"destinationSites":null,"refulseReason":null,"appraise":false}],"total":1}"
+
+# ---- 活动 tab 模块外壳（211KB，单项最大；代价是失去真实赛事列表）----
+^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?outing/reqOutingIndex\? mock-response-body data-type=json status-code=200 data="{"errCode":"0","modules":[{"type":1,"name":"","moreUrl":""}]}"
+
+# ---- 首页「在路上」信息流（46KB / 每次下拉）----
+# 分页靠 currPageIndex：第 1 页给诗词，第 2 页起给空列表（= 没有更多了）。
+# 两条正则互斥，不依赖 [Rewrite] 的匹配顺序。
+# ⚠️ 诗词池或 FEED_PAGE_SIZE 改动后，要重新生成 mocks/Lvtu2bulu_feed_p1.json；
+#    诗词超过一页（>4 首）时这里只会吐第 1 页，第 2 页起的诗要么加 mock 规则，
+#    要么把这两条 mock 删掉、退回脚本分页。
+^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?v9/home/feed\?(?:\S*&)?currPageIndex=1(?:&|$) mock-response-body data-type=json status-code=200 data="{"errCode":"0","data":[{"id":"D900000000","type":2,"bizId":"900000000","cover":null,"title":"踏莎行","subTitle":"小径红稀，芳郊绿遍，高台树色阴阴见。春风不解禁杨花，蒙蒙乱扑行人面。","author":{"avatarId":0,"nickname":"晏殊","userId":0},"liked":false,"likeCount":0,"link":{"url":"","type":1},"time":0,"dynamic":{"dynamicId":900000000,"title":"","text":"","files":[],"type":0,"fileType":0,"targetId":0,"issueTime":0,"entryDetailUrl":""}},{"id":"D900000001","type":2,"bizId":"900000001","cover":null,"title":"朝中措·送刘原甫出守维扬","subTitle":"平山栏槛倚晴空，山色有无中。手种堂前垂柳，别来几度春风。","author":{"avatarId":0,"nickname":"欧阳修","userId":0},"liked":false,"likeCount":0,"link":{"url":"","type":1},"time":0,"dynamic":{"dynamicId":900000001,"title":"","text":"","files":[],"type":0,"fileType":0,"targetId":0,"issueTime":0,"entryDetailUrl":""}},{"id":"D900000002","type":2,"bizId":"900000002","cover":null,"title":"渔家傲","subTitle":"绿水悠悠天杳杳，浮生岂得长年少。莫惜醉来开口笑，须信道，人间万事何时了。","author":{"avatarId":0,"nickname":"晏殊","userId":0},"liked":false,"likeCount":0,"link":{"url":"","type":1},"time":0,"dynamic":{"dynamicId":900000002,"title":"","text":"","files":[],"type":0,"fileType":0,"targetId":0,"issueTime":0,"entryDetailUrl":""}},{"id":"D900000003","type":2,"bizId":"900000003","cover":null,"title":"破阵子","subTitle":"燕子来时新社，梨花落后清明。池上碧苔三四点，叶底黄鹂一两声。日长飞絮轻。","author":{"avatarId":0,"nickname":"晏殊","userId":0},"liked":false,"likeCount":0,"link":{"url":"","type":1},"time":0,"dynamic":{"dynamicId":900000003,"title":"","text":"","files":[],"type":0,"fileType":0,"targetId":0,"issueTime":0,"entryDetailUrl":""}}]}"
+^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?v9/home/feed\?(?:\S*&)?currPageIndex=(?:[2-9]|\d{2,}) mock-response-body data-type=json status-code=200 data="{"errCode":"0","data":[]}"
+# 兜底：URL 里完全没有 currPageIndex 时也按第 1 页处理（负向先行断言，与上面两条互斥）。
+# 两次抓包 471 条请求里没出现过这种请求；万一 Loon 不支持先行断言，这条会被忽略，
+# 退化成「缺参时漏出真实信息流」，症状明显（首页突然出现真实内容），好排查。
+^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?v9/home/feed(?!\S*currPageIndex=) mock-response-body data-type=json status-code=200 data="{"errCode":"0","data":[{"id":"D900000000","type":2,"bizId":"900000000","cover":null,"title":"踏莎行","subTitle":"小径红稀，芳郊绿遍，高台树色阴阴见。春风不解禁杨花，蒙蒙乱扑行人面。","author":{"avatarId":0,"nickname":"晏殊","userId":0},"liked":false,"likeCount":0,"link":{"url":"","type":1},"time":0,"dynamic":{"dynamicId":900000000,"title":"","text":"","files":[],"type":0,"fileType":0,"targetId":0,"issueTime":0,"entryDetailUrl":""}},{"id":"D900000001","type":2,"bizId":"900000001","cover":null,"title":"朝中措·送刘原甫出守维扬","subTitle":"平山栏槛倚晴空，山色有无中。手种堂前垂柳，别来几度春风。","author":{"avatarId":0,"nickname":"欧阳修","userId":0},"liked":false,"likeCount":0,"link":{"url":"","type":1},"time":0,"dynamic":{"dynamicId":900000001,"title":"","text":"","files":[],"type":0,"fileType":0,"targetId":0,"issueTime":0,"entryDetailUrl":""}},{"id":"D900000002","type":2,"bizId":"900000002","cover":null,"title":"渔家傲","subTitle":"绿水悠悠天杳杳，浮生岂得长年少。莫惜醉来开口笑，须信道，人间万事何时了。","author":{"avatarId":0,"nickname":"晏殊","userId":0},"liked":false,"likeCount":0,"link":{"url":"","type":1},"time":0,"dynamic":{"dynamicId":900000002,"title":"","text":"","files":[],"type":0,"fileType":0,"targetId":0,"issueTime":0,"entryDetailUrl":""}},{"id":"D900000003","type":2,"bizId":"900000003","cover":null,"title":"破阵子","subTitle":"燕子来时新社，梨花落后清明。池上碧苔三四点，叶底黄鹂一两声。日长飞絮轻。","author":{"avatarId":0,"nickname":"晏殊","userId":0},"liked":false,"likeCount":0,"link":{"url":"","type":1},"time":0,"dynamic":{"dynamicId":900000003,"title":"","text":"","files":[],"type":0,"fileType":0,"targetId":0,"issueTime":0,"entryDetailUrl":""}}]}"
+
+# ---- 专区 ----
+^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?proSpecial/allData mock-response-body data-type=json status-code=200 data="{"errCode":"0","data":[{"name":"","longitude":null,"latitude":null,"cover":0,"provinceId":null,"provinceName":null,"cityId":null,"cityName":null,"productLink":null,"customPhone":null,"rescuePhone":null,"maxLon":null,"maxLat":null,"minLon":null,"minLat":null,"dataId":900000000,"dataType":0,"linkType":0,"sorts":null,"details":null,"spots":null,"routes":null,"outingRoutes":null,"spotRoutes":null,"eventInfos":null,"news":null,"newsCategorys":null,"outing":null,"aaOutings":null,"dynamicInfos":null,"videos":null,"accessUsers":null,"articleInfos":null,"banners":null,"modules":null,"msgs":null,"notices":null,"routeCategorys":null,"ename":null}]}"
+
+# ---- 零碎小接口（流量可忽略，但顺手掐掉请求）----
+^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?getSplash mock-response-body data-type=json status-code=200 data="{"errCode":"0","infos":[]}"
+^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?getPopInfo mock-response-body data-type=json status-code=200 data="{"errCode":"0","popInfos":[]}"
+^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?v9/advert/getUniversalAd mock-response-body data-type=json status-code=200 data="{"errCode":"0","data":[]}"
+^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?advert/getAllAdInfo mock-response-body data-type=json status-code=200 data="{"errCode":"0","data":{}}"
+^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?advert/getAdInfo mock-response-body data-type=json status-code=200 data="{"errCode":"0","data":null}"
+^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?outing/getDetailBanner mock-response-body data-type=json status-code=200 data="{"errCode":"0","data":[]}"
+^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?v9/home/getTabGuide mock-response-body data-type=json status-code=200 data="{"errCode":"0","data":[]}"
+^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?app/getSearchPromptWords mock-response-body data-type=json status-code=200 data="{"errCode":"0","data":null}"
+^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?greenPea/queryTasks mock-response-body data-type=json status-code=200 data="{"errCode":"0","tasks":[{"taskId":900000000,"title":"","picId":0,"text":"","amount":0,"state":0,"type":1,"url":null,"target":null,"condition":null,"currNum":null,"upNum":null}]}"
+^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?v9/routeChannel/item mock-response-body data-type=json status-code=200 data="{"errCode":"0","data":[{"id":900000000,"name":"","coverId":0,"description":""}]}"
+^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?v9/routeChannel/topic mock-response-body data-type=json status-code=200 data="{"errCode":"0","data":[{"id":900000000,"name":"","coverId":0}]}"
+^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?v9/route(?:Channel/(?:activity|spot)|/list) mock-response-body data-type=json status-code=200 data="{"errCode":"0","data":[]}"
+
+# 导航栏皮肤：9.2.3 从 appNavigateSkin 改名 appNavSkin，体积 73KB → 1.5MB 内联 base64 PNG。
+# 纯装饰，reject 是唯一真正省流量的一项（脚本改写省不了，body 照常下完才交给 App）。
+^https?://helper\.2bulu\.com/appNavSkin reject-200
+# 旧名，兼容未升级的客户端
 ^https?://helper\.2bulu\.com/appNavigateSkin reject-200
+
+# 行为埋点收集器：helper / h5 / saas-h5 三个 host 上各有一份（本次抓包合计 25 次），
+# 域名层拦不住（helper 还要跑业务），只能走重写层
+^https?://(?:helper|h5|saas-h5)\.2bulu\.com/(?:api/)?userBehavior/api/v1/analytics/collect/single reject-dict
+
+# 以下三条来自 osinx/Script 的黑名单，9.2.3 抓包里未出现（可能已下线或本次没触发）。
+# 打在不存在的端点上无副作用，留作保险。
+^https?://helper\.2bulu\.com/monitor/upBehavior reject-dict
+^https?://helper\.2bulu\.com/saveSplashFrequencyStatistics reject-dict
+^https?://helper\.2bulu\.com/dayActiveUser reject-dict
+
+# 我的页会员推广横幅（「开通会员 享免广告、热力图、3D地图等15项权益」+「立即开通」）
+# 纯推广位，data 锁 null 让它不渲染。不碰任何权限字段。
+^https?://(?:helper|saas-h5)\.2bulu\.com/(?:helperapi/)?vip/message mock-response-body data-type=json status-code=200 data="{"errCode":"0","data":null}"
+
+# 商城页面本体 → mock 空 body：WebView 收到 200 立刻结束加载，得到干净空白页。
+# 入口实测是 shop45920354.m.youzan.com/v2/showcase/homepage?kdt_id=45728186，
+# 下面的正则覆盖全部 youzan.com 子域（m./h5./passport./probe./tj./uic./tuicashier. 等）。
+# 代价：要给 *.youzan.com 开 MITM（见 [MITM] 段）。
+^https?://(?:[\w.-]+\.)?youzan\.com mock-response-body data-type=text status-code=200 data=" "
 
 # 社区 H5
 ^https?://www\.2bulu\.com/community/ reject
 
-# ===== 广告/统计 SDK + 商城（连接层拒绝）=====
-
+# ============================================================
 [Rule]
+# ============================================================
 
+# --- TopOn / Taku 广告栈（9.2.3 起替换了原来的天目/百合，adConfig 里 adType="taku"）---
+DOMAIN-SUFFIX,toponad.com,REJECT
+DOMAIN-SUFFIX,statisticslinks.com,REJECT
+DOMAIN,d2q1y7tir281x6.cloudfront.net,REJECT
+
+# --- 埋点 / 分销 ---
+DOMAIN,2bulu-analytics.obs.cn-south-1.myhuaweicloud.com,REJECT
+DOMAIN,api.xiebao18.com,REJECT
+DOMAIN,msg.umengcloud.com,REJECT
+DOMAIN,apmplus.volces.com,REJECT
+
+# --- 商城（底栏 tab，= 有赞 H5；打开一次实测 7.06MB）---
+# 加载链路（抓包 197 实测，插件关闭状态）：
+#   ① open.youzanyun.com/api/auth_exempt/...  SDK 鉴权（807B）
+#   ② shop45920354.m.youzan.com/v2/showcase/homepage?kdt_id=45728186  页面 HTML
+#   ③ 页面再去拉 *.yzcdn.cn 的图片资源（120 次约 7MB）
+#
+# ⚠️ ① 必须放行：把 youzanyun 整个 REJECT 掉，SDK 拿不到鉴权就走不到 ②，
+#    表现为【永远转圈且一条请求都不发】——之前三份抓包查不出原因就是卡在这。
+#    放行它（807B，一次）→ WebView 走到 ②，被下面的 mock 变成空白页，② ③ 的流量全省。
+# ⚠️ 这里也【不能】放 DOMAIN-SUFFIX,youzan.com,REJECT：[Rule] 的连接层拒绝发生在
+#    MITM/重写之前，留着它 mock 永远没机会执行。
+DOMAIN,tj1.youzanyun.com,REJECT
+DOMAIN,fp.youzanyun.com,REJECT
+# yzcdn.cn = 有赞图片 CDN，六份抓包实测【只在进商城时出现】，其余场景零请求，
+# 可以安全拒绝，作为 mock 万一失效时的 7MB 兜底。（推翻旧文档「不动 yzcdn」那条结论）
+DOMAIN-SUFFIX,yzcdn.cn,REJECT
+
+# --- 旧广告 SDK（8.x 时代，9.2.3 抓包里已不出现，留着零成本）---
 DOMAIN,sdk.tianmu.mobi,REJECT
 DOMAIN,ad.baihemob.com,REJECT
 DOMAIN,inner.baihemob.com,REJECT
@@ -82,11 +178,10 @@ DOMAIN,ad.shunchangzhixing.com,REJECT
 DOMAIN,report.shunchangzhixing.com,REJECT
 DOMAIN,d.xfinfr.com,REJECT
 DOMAIN,lf-cdn-tos.bytescm.com,REJECT
-DOMAIN,msg.umengcloud.com,REJECT
-DOMAIN,apmplus.volces.com,REJECT
-DOMAIN-SUFFIX,youzan.com,REJECT
 
-# ===== MITM =====
+# ⚠️ down-files.2bulu.com 是地图瓦片与文件下载，绝对不能 reject。
 
+# ============================================================
 [MITM]
-hostname = helper.2bulu.com, www.2bulu.com
+# ============================================================
+hostname = helper.2bulu.com, saas-h5.2bulu.com, www.2bulu.com, *.youzan.com
