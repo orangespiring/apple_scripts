@@ -37,6 +37,9 @@ const APPSEC = "c2ed53a74eeefe3cf99fbd01d8c9c375";
 const CACHE_KEY = "bili_home_watchlater_raw"; // 缓存 toview 原始 list（按列数即时构卡，支持单/双列切换）
 const OFFSET_KEY = "bili_home_watchlater_off"; // 分页游标：下一页起始偏移（脚本自己维护，见下）
 const DAILY_KEY = "bili_home_daily_feed"; // 「每天推送(n)次」的状态：{date,dbl,n,items}，n=当天已投放次数
+// 真实 feed 的 data.config 缓存。请求阶段短路时没有真实响应可读，回放它；
+// 独立于 DAILY_KEY（不按天清），这样跨天后第一次短路也有 config 可用。
+const FEED_CFG_KEY = "bili_home_feed_cfg";
 const PAGE_SIZE = 20; // 每页显示条数（首屏 + 每次下拉加载）
 // ⚠️ 分页游标必须脚本自维护，不能依赖 App 回传的 idx（capture60 实测）：
 //    App 下拉加载（pull=0）回传的 idx = 它手里所有卡的「最大 idx」，而首屏顶部那张卡 idx 恒定最大
@@ -690,9 +693,95 @@ function handleTab() {
   $done({ body });
 }
 
+// ===== 请求阶段短路（http-request）=====
+// 「每天推送(n)次」配额用完后，handleDaily 的三条分支（加载更多 / 会话内刷新 / 冷启动回放）
+// **输出与服务器返回什么无关** —— 判据 open_event/pull/idx/column 全在 URL query 里，请求阶段
+// 就能判定。于是把这三类请求在请求阶段直接短路掉，不发上游（实测 feed/index 单次
+// _loon.downloadSize 约 40 KB，一次会话 19 条样本里 9 条属于这一类）。
+//
+// ⚠️ 设计约束：**请求阶段只判「该不该放行」，不投放、不改配额计数**。一旦放行，响应阶段的
+//    handleDaily 原样跑 —— 于是「空/异常响应不消耗当天配额」等既有语义一条都不用重写，
+//    也就不存在两处逻辑漂移的风险。
+// ⚠️ 判不准时一律放行：宁可没省到流量，也不能把首页搞成空白页（§14a 那两次真机 bug）。
+function isRequestPhase() {
+  if (typeof $response === "undefined" || $response === null) return true;
+  return typeof $response.body === "undefined" && typeof $response.status === "undefined";
+}
+
+function readFeedConfig() {
+  try { const raw = $persistentStore.read(FEED_CFG_KEY); if (raw) return JSON.parse(raw); } catch (e) {}
+  return null;
+}
+function writeFeedConfig(cfg) {
+  if (!cfg) return;
+  try { $persistentStore.write(JSON.stringify(cfg), FEED_CFG_KEY); } catch (e) {}
+}
+
+// 交回一个合法的 feed 响应、不发上游。真机判据（HAR）：这条的 _loon.downloadSize 为 0、
+// serverIPAddress 为空 = 真短路了。
+function shortCircuitFeed(items, note) {
+  LOG("req 短路·" + note + "·返回" + items.length + "条");
+  $done({
+    response: {
+      status: 200,
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+      body: buildFeed(items, dailyConfig(readFeedConfig())),
+    },
+  });
+}
+
+function mainRequest(url) {
+  // 只有 feed/index 有短路空间：tab/v2 四件事里三件是在真实响应上删/改（底栏 icon、
+  // 右上角「消息」原对象全靠透传），必须走上游。
+  if (!/\/x\/v2\/feed\/index/.test(url)) { $done({}); return; }
+
+  const mode = parseHomeMode();
+  if (mode !== MODE_FILTER) { $done({}); return; }   // 其余四档本轮不涉及
+  const ff = parseFeedFilter(getArgRaw("homeFeedFilter"));
+  if (ff.dailyPush <= 0) { $done({}); return; }      // 没启用投放节奏 = 每条请求都要真实内容
+
+  const q = parseQuery(url);
+  const c = parseInt(q.column, 10);
+  const isDouble = (c === 2 || c === 4);
+  const today = todayStamp();
+
+  let st = null;
+  try { const raw = $persistentStore.read(DAILY_KEY); if (raw) st = JSON.parse(raw); } catch (e) {}
+  // 跨天/无状态：与 handleDaily 起手式保持一致（它也是先造一个 n=0 的空状态再往下走）
+  if (!st || st.date !== today) st = { date: today, dbl: isDouble, n: 0, items: [] };
+
+  const cold = isColdStart(q);
+  const colChanged = st.n > 0 && st.dbl !== isDouble;
+  const trace = "·pull=" + q.pull + "·open=" + q.open_event + "·双列=" + isDouble
+    + "·今日" + st.n + "/" + ff.dailyPush + "次";
+
+  // ① 加载更多：handleDaily 永远给空且不消耗配额 → 与服务器返回什么无关（顺序同 handleDaily，
+  //    这一条排在 push 判定之前）
+  if (q.pull === "0") { shortCircuitFeed([], "加载更多" + trace); return; }
+
+  // 该投放新的一屏 → 必须拿真实内容，放行
+  if (colChanged || st.n === 0 || (cold && st.n < ff.dailyPush)) {
+    LOG("req 该投放·放行上游" + trace);
+    $done({});
+    return;
+  }
+
+  // ② 配额已满 + 冷启动 → 回放缓存那一屏（再过一遍过滤器，中途改了参数也立刻生效）
+  if (cold && st.items && st.items.length) {
+    const bw = parseBlockWords(getArgRaw("homeBlockWords"));
+    shortCircuitFeed(filterNativeItems(st.items, ff, bw).items, "配额满·冷启动回放" + trace);
+    return;
+  }
+  // ③ 配额已满 + 会话内刷新 → 给空（绝不能回放，会被 App 追加成重复）
+  shortCircuitFeed([], "配额满·会话内刷新" + trace);
+}
+
 // —— 主流程 ——
 (function main() {
   const url = $request.url;
+
+  // 阶段分流：同一份 JS 同时挂在 http-request 与 http-response 上，共用常量与 $persistentStore key
+  if (isRequestPhase()) { mainRequest(url); return; }
 
   // tab/v2 请求走 tab 改写分支（与 feed/index 共用本脚本，按 URL 分流）
   if (/\/x\/resource\/show\/tab\/v2/.test(url)) {
@@ -949,6 +1038,7 @@ function handleDaily(q, isDouble, config, ff, bw) {
         if (!colChanged) st.n += 1;
         st.dbl = isDouble; st.items = f0.items;
         try { $persistentStore.write(JSON.stringify(st), DAILY_KEY); } catch (e) {}
+        writeFeedConfig(orig.data.config);   // 供请求阶段短路时回放（那时没有真实响应可读）
         LOG("daily 投放第" + st.n + "屏·" + raw0.length + "->" + f0.items.length + "条·丢弃" + ffLog(f0.dropped)
           + (colChanged ? "·(切列数重投不计次)" : "") + trace);
         orig.data.items = f0.items;

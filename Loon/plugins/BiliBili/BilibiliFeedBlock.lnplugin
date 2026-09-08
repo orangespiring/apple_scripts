@@ -29,7 +29,7 @@ purifyComment = switch,true,tag=评论区·过滤置顶广告,desc=只管 UP 主
 optimizeRequest = switch,false,tag=评论区·加载优化
 cleanRelates = switch,true,tag=播放·清空推荐列表 (和'加载优化'冲突),desc=连正常视频推荐一起清空（关=仅去广告、保留推荐）
 sponsorBlock = switch,true,tag=播放·空降助手（跳过赞助段）
-logLevel = select,"debug","error","warn","info","off",tag=脚本日志等级,desc=TEMP 版默认 debug，日志里能看到 [SearchAll] N->M 过滤统计
+logLevel = select,"error","warn","info","debug","off",tag=脚本日志等级,desc=默认 error（只报异常）。调到 debug 能在 Loon 日志里看到 [HWL]/[SC]/[SPL]/[SearchAll] 各脚本的逐条统计，排查时再开
 
 # ===== 网络层（无需 MITM）=====
 [Rule]
@@ -70,6 +70,33 @@ http-response ^https?://app\.bili(?:bili\.com|api\.net)/x/v2/splash/list script-
 # 覆盖：DynAll / Popular / View / ViewProgress / RelatesFeed / PlayView / PlayViewUnite / SearchAll / DmView / MainList / PGC PlayView
 http-response ^https://(?:grpc\.biliapi\.net|app\.bili(?:bili\.com|api\.net))/bilibili\.(?:app\.(?:show\.v1\.Popular/Index|dynamic\.v2\.Dynamic/DynAll|view(?:unite)?\.v1\.View/(?:View|ViewProgress|RelatesFeed)|playurl\.v1\.PlayURL/PlayView|playerunite\.v1\.Player/PlayViewUnite)|polymer\.app\.search\.v1\.Search/SearchAll|community\.service\.dm\.v1\.DM/DmView|main\.community\.reply\.v1\.Reply/MainList|pgc\.gateway\.player\.v2\.PlayURL/PlayView)$ script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliProtobufResponse.js, requires-body=true, binary-body-mode=true, argument=[{displayUpList},{purifyComment},{sponsorBlock},{cleanRelates},{cleanSearch},{searchMaxItems},{searchMinDur},{logLevel}], tag=B站·gRPC去广告+播放页推荐
 
+# ===== 请求阶段短路（不发上游，2026-09-08 新增）=====
+# ⚠️ 为什么要有这一段：[Script] 型改写**一分下行都省不到** —— Loon 把整个响应体下完才交给脚本。
+#    179_ 铁证：RelatesFeed 的 _loon.downloadSize=29,217 而 content.size=21；
+#              splash/list 的 downloadSize≈30,512 而 content.size=250。
+#    真正不发上游的只有 reject-* / mock-response-body / http-request 里的 $done({response})。
+# ⚠️ 下面每一条对应的 http-response 规则都**保留不动**，那是失败模式安全网：万一 Loon 忽略
+#    response 键，请求照常走上游、由响应脚本兜底，只是没省到流量，不会挂。
+# 判据：HAR 里这些条目的 _loon.downloadSize 为 0、serverIPAddress 为空 = 真短路了。
+
+# 首页信息流：只短路「每天推送(n)次」配额用完后的三类请求（加载更多 / 会话内刷新 / 冷启动回放），
+#   它们的输出与服务器返回什么无关。判据 open_event/pull/idx/column 全在 URL query 里。
+#   恒开（同上方 feed/index 那条：select 参数不能用 enable= 门控），脚本内自己判该不该放行。
+http-request ^https?://app\.bili(?:bili\.com|api\.net)/x/v2/feed/index script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliHome.js, argument=[{homeShow},{homeFeedFilter},{homeBlockWords}], tag=B站·首页信息流·请求阶段短路
+
+# 开屏广告列表：输出恒为「成功但无广告」，与服务器返回什么无关 → 整条短路。
+http-request ^https?://app\.bili(?:bili\.com|api\.net)/x/v2/splash/list script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliSplashBlock.js, enable={cleanSplash}, tag=B站·开屏广告列表·请求阶段短路
+
+# 播放页「相关推荐」下滑加载更多：cleanRelates=on 时响应脚本把 relates 清成 []，整条请求白发。
+#   ⚠️ 返回的 5 字节空帧**不带分页游标** —— 原先清空却把游标(base64 "relate3/4/5"，逐页递增)
+#      还回去，App 以为还有下一页继续翻（34_ 里同一视频连发 3 次、共 57,406 B 全下完即丢）。
+#   不需要 requires-body：这条无条件短路，不读请求体。
+http-request ^https://(?:grpc\.biliapi\.net|app\.bili(?:bili\.com|api\.net))/bilibili\.app\.viewunite\.v1\.View/RelatesFeed$ script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliShortCircuit.js, enable={cleanRelates}, tag=B站·相关推荐翻页·请求阶段短路
+
+# 搜索结果翻页：只短路 searchMaxItems 配额用完之后的翻页（第 1 页永远放行）。
+#   判据在请求体 protobuf 里（f10 分页消息有无 cursor），故需要 binary-body-mode 读请求体。
+http-request ^https://(?:grpc\.biliapi\.net|app\.bili(?:bili\.com|api\.net))/bilibili\.polymer\.app\.search\.v1\.Search/SearchAll$ script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliShortCircuit.js, requires-body=true, binary-body-mode=true, argument=[{searchMaxItems},{logLevel}], tag=B站·搜索翻页·请求阶段短路
+
 # — 请求侧（上游 Sparkle，直引）—
 
 # 空降助手
@@ -103,7 +130,7 @@ http-response ^https://api\.live\.bilibili\.com/xlive/(?:app-interface/v2/index/
 ^https://grpc\.biliapi\.net/bilibili\.app\.interface\.v1\.Teenagers/ModeStatus$ mock-response-body data-type=text data="AAAAABMKEQgCEgl0ZWVuYWdlcnMgAioA" mock-data-is-base64=true
 ^https://grpc\.biliapi\.net/bilibili\.app\.interface\.v1\.Search/DefaultWords$ mock-response-body data-type=text data="AAAAACEaHeaQnOe0ouinhumikeOAgeeVquWJp+aIlnVw5Li7KAE=" mock-data-is-base64=true
 ^https://grpc\.biliapi\.net/bilibili\.app\.(?:view\.v1\.View/TFInfo|viewunite\.v1\.View/(?:PlayPause|ViewEndPage|AIRelateAsync))$ mock-response-body data-type=text data="AAAAAAA=" mock-data-is-base64=true
-^https://grpc\.biliapi\.net/bilibili\.app\.(?:interface\.v1\.(?:Teenagers/ModeStatus|Search/DefaultWords)|view\.v1\.View/TFInfo|viewunite\.v1\.View/(?:ViewEndPage|AIRelateAsync))$ response-header-add grpc-status 0
+^https://grpc\.biliapi\.net/bilibili\.app\.(?:interface\.v1\.(?:Teenagers/ModeStatus|Search/DefaultWords)|view\.v1\.View/TFInfo|viewunite\.v1\.View/(?:PlayPause|ViewEndPage|AIRelateAsync))$ response-header-add grpc-status 0
 
 # 详情页弹窗广告（`176_` 实测；纪录片/番剧这类 PGC 页最容易触发）
 #   · mall-dayu/muggle/iam = 会员购 in-app message，实测下发 maStyleType=COUPON_POPUP
