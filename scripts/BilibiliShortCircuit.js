@@ -5,13 +5,18 @@
  * $done({response}) 交回一个合法的空帧，**不发上游**。判据见 CLAUDE.md
  * 「请求阶段短路：$done({response})」一节。
  *
- * 覆盖两个端点（按 URL 分流）：
+ * 覆盖三个端点（按 URL + 阶段分流）：
  *   1. viewunite.v1.View/RelatesFeed —— 播放页「相关推荐」的下滑加载更多。
  *      cleanRelates=on 时 gRPC 响应脚本会把 relates(f1) 清成 []，即
  *      **建模部分的输入对输出零贡献** → 整条请求白发。由 [Script] 行的
  *      enable={cleanRelates} 门控，关掉开关这条规则整条不装载、自动走真实响应。
  *   2. polymer.app.search.v1.Search/SearchAll —— 只短路**翻页**那一半，
  *      且只在 searchMaxItems 配额已用完时。第 1 页永远放行（判据见下）。
+ *   3. viewunite.v1.View/AIRelateAsync —— 播放页「相关视频」的真正来源（2026-09-08 起）。
+ *      · cleanRelates=on  → 请求阶段短路空帧（同 RelatesFeed）
+ *      · cleanRelates=off → **响应阶段只去广告、保留推荐**，兑现开关 desc 的承诺
+ *        （此前它是 [Rewrite] 里一条**恒开**的 mock 空帧，关掉 cleanRelates 也没有推荐，
+ *         开关名不副实。见 REFERENCE §15L）
  *
  * ── gRPC 帧格式 ───────────────────────────────────────────────────────────
  *   1 B flag(0=不压缩) + 4 B 大端长度 + protobuf body
@@ -130,12 +135,124 @@ function requestPayload() {
   return body;
 }
 
+// ===== AIRelateAsync：只去广告、保留推荐（cleanRelates=off 时走这里）=====
+// 响应结构（`176_` 插件关着抓，151,520 B 实测）：
+//   f1 = AdsControlDto        35,725 B  广告调度/上报/openapp 唤起白名单/adtrack.qianwen.com
+//   f2 → f1 → f22(Relates) → f1[] = 11 张 RelateCard，每张的 f1 = RelateCardType
+//   f3 = 131 B
+// 处理：删顶层 f1；在卡列表里滤掉 AD_CARD_TYPES。与 fork 的 ei() 用同一套枚举，
+// 于是三处（View/View、RelatesFeed、AIRelateAsync）行为一致。
+// ⚠️ 不需要 proto schema —— 全程只做原始 protobuf 的「按字段号保留/丢弃」，未知字段原样搬运。
+// ⚠️ §11c-1 的教训：按 type 数字过滤是**易腐代码**，B 站改编号就静默失效且症状是「开关没反应」。
+//    所以下面打了 N->M 的日志，抓包/日志里一眼能看出还在不在滤。
+const AD_CARD_TYPES = [4, 5, 6, 7, 11]; // GAME / CM_TYPE / LIVE / AI_RECOMMEND / COURSE
+
+function putVarint(out, n) { do { let b = n & 0x7f; n >>>= 7; if (n) b |= 0x80; out.push(b); } while (n); }
+
+// 扫一层：返回 [{f, w, whole, payload}]，whole = 含 key 的完整原始字节（保留它就等于原样搬运）
+function scanFields(buf) {
+  const out = []; let i = 0;
+  const rv = () => { let s = 0, r = 0; for (;;) { if (i >= buf.length) throw new Error("eof"); const b = buf[i++]; r |= (b & 0x7f) << s; s += 7; if (!(b & 0x80)) return r >>> 0; } };
+  try {
+    while (i < buf.length) {
+      const st = i, key = rv(), f = key >>> 3, w = key & 7;
+      let payload = null, val = -1;
+      if (w === 0) val = rv();
+      else if (w === 2) { const n = rv(); payload = buf.subarray(i, i + n); i += n; }
+      else if (w === 5) i += 4;
+      else if (w === 1) i += 8;
+      else break;
+      out.push({ f: f, w: w, val: val, whole: buf.subarray(st, i), payload: payload });
+    }
+  } catch (e) {}
+  return out;
+}
+
+function concat(parts) {
+  let n = 0; for (const p of parts) n += p.length;
+  const o = new Uint8Array(n); let k = 0;
+  for (const p of parts) { o.set(p, k); k += p.length; }
+  return o;
+}
+
+// 用新 payload 重新编码一个 length-delimited 字段
+function reField(f, payload) {
+  const head = []; putVarint(head, (f << 3) | 2); putVarint(head, payload.length);
+  return concat([new Uint8Array(head), payload]);
+}
+
+// 在 buf 里找字段号 f 的第一个 length-delimited 值，用 fn 改写它，其余字节原样保留
+function rewriteField(buf, f, fn) {
+  const parts = []; let touched = false;
+  for (const it of scanFields(buf)) {
+    if (!touched && it.f === f && it.w === 2) { parts.push(reField(f, fn(it.payload))); touched = true; }
+    else parts.push(it.whole);
+  }
+  return touched ? concat(parts) : buf;
+}
+
+function stripAdsKeepRelates(payload) {
+  let dropped = 0, kept = 0;
+  // 顶层：丢掉 f1(AdsControlDto)，其余原样
+  let parts = [];
+  for (const it of scanFields(payload)) {
+    if (it.f === 1) continue;                                   // 广告块整字段删
+    if (it.f === 2 && it.w === 2) {
+      // f2 → f1 → f22(Relates) → f1[] 卡列表
+      parts.push(reField(2, rewriteField(it.payload, 1, (w1) =>
+        rewriteField(w1, 22, (rel) => {
+          const keep = [];
+          for (const c of scanFields(rel)) {
+            if (c.f !== 1 || c.w !== 2) { keep.push(c.whole); continue; }
+            let ctype = -1;
+            for (const cf of scanFields(c.payload)) if (cf.f === 1 && cf.w === 0) { ctype = cf.val; break; }
+            if (AD_CARD_TYPES.indexOf(ctype) >= 0) { dropped++; continue; }
+            kept++; keep.push(c.whole);
+          }
+          return concat(keep);
+        })
+      )));
+      continue;
+    }
+    parts.push(it.whole);
+  }
+  LOG("AIRelateAsync·去广告块+滤卡·保留" + kept + "张·丢弃" + dropped + "张");
+  return concat(parts);
+}
+
+function handleAIRelateResponse() {
+  let b = $response.bodyBytes;
+  if (!b) b = $response.body;
+  if (b && typeof b === "object" && !b.length && b.byteLength) b = new Uint8Array(b);
+  if (!b || b.length < 5) { LOG("AIRelateAsync·读不到响应体·原样放行"); $done({}); return; }
+  const flag = b[0];
+  const len = (b[1] << 24 | b[2] << 16 | b[3] << 8 | b[4]) >>> 0;
+  let payload = b.subarray(5, 5 + len);
+  if (flag) payload = $utils.ungzip(payload);
+  const out = stripAdsKeepRelates(payload);
+  const head = new Uint8Array(5);
+  head[0] = 0; head[1] = (out.length >>> 24) & 255; head[2] = (out.length >>> 16) & 255;
+  head[3] = (out.length >>> 8) & 255; head[4] = out.length & 255;
+  // ⚠️ 两个键都给：Loon 原生用 body（§15i 实证），但项目旧文档记的是 $done({bodyBytes})。
+  //    多给一个未知键无害，少给一个就是「脚本跑了但改写没落地」——那种症状最难查。
+  const framed = concat([head, out]);
+  $done({ body: framed, bodyBytes: framed });   // 重打帧：flag=0（不压缩）
+}
+
 // ===== 主流程 =====
 (function main() {
   let url = "";
   try { url = $request.url || ""; } catch (e) {}
 
   try {
+    // —— AIRelateAsync ——
+    //   响应阶段只会在 cleanRelates=off 时走到：开着时请求阶段那条规则已把它短路、响应脚本跑不到。
+    if (url.indexOf("viewunite.v1.View/AIRelateAsync") !== -1) {
+      if (typeof $response !== "undefined" && $response !== null) { handleAIRelateResponse(); return; }
+      shortCircuit("AIRelateAsync");   // 请求阶段（enable={cleanRelates} 装载即代表要清空）
+      return;
+    }
+
     // —— RelatesFeed：无条件短路（本规则由 enable={cleanRelates} 门控，装载即代表要清空）——
     // ⚠️ 空帧**不带分页游标**是刻意的。原脚本清空 relates 却把游标原样还回去
     //    （21 B 帧 = 5 B 帧头 + f2{f2:"cmVsYXRlNA=="}，base64 解出是 "relate4"、逐页递增），

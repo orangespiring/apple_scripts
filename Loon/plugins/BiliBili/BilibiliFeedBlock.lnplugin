@@ -91,11 +91,20 @@ http-request ^https?://app\.bili(?:bili\.com|api\.net)/x/v2/splash/list script-p
 #   ⚠️ 返回的 5 字节空帧**不带分页游标** —— 原先清空却把游标(base64 "relate3/4/5"，逐页递增)
 #      还回去，App 以为还有下一页继续翻（34_ 里同一视频连发 3 次、共 57,406 B 全下完即丢）。
 #   不需要 requires-body：这条无条件短路，不读请求体。
-http-request ^https://(?:grpc\.biliapi\.net|app\.bili(?:bili\.com|api\.net))/bilibili\.app\.viewunite\.v1\.View/RelatesFeed$ script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliShortCircuit.js, enable={cleanRelates}, tag=B站·相关推荐翻页·请求阶段短路
+http-request ^https://(?:grpc\.biliapi\.net|app\.bili(?:bili\.com|api\.net))/bilibili\.app\.viewunite\.v1\.View/(?:RelatesFeed|AIRelateAsync)$ script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliShortCircuit.js, enable={cleanRelates}, tag=B站·相关推荐·请求阶段短路
 
 # 搜索结果翻页：只短路 searchMaxItems 配额用完之后的翻页（第 1 页永远放行）。
 #   判据在请求体 protobuf 里（f10 分页消息有无 cursor），故需要 binary-body-mode 读请求体。
 http-request ^https://(?:grpc\.biliapi\.net|app\.bili(?:bili\.com|api\.net))/bilibili\.polymer\.app\.search\.v1\.Search/SearchAll$ script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliShortCircuit.js, requires-body=true, binary-body-mode=true, argument=[{searchMaxItems},{logLevel}], tag=B站·搜索翻页·请求阶段短路
+
+# 播放页「相关视频」的真正来源 AIRelateAsync（2026-09-08 改由脚本接管，此前是恒开的 mock 空帧）。
+#   一个响应装两样：f1=广告块 AdsControlDto（openapp 唤起白名单 / adtrack.qianwen 上报），
+#   f2→f1→f22(Relates)→卡列表。`176_` 实测 11 张卡里 1 张是 CM_TYPE 广告。
+#   · cleanRelates=on  → 上面那条请求规则已把它短路成空帧，本条跑不到（省 ~28 KB/次）
+#   · cleanRelates=off → 走本条：**删 f1 + 滤掉 {4,5,6,7,11} 类广告卡**，正常推荐一张不少
+#   ⚠️ 本条**故意不带 enable=**：enable= 无法取反，靠「开着时被请求短路吞掉」实现二选一。
+#      顺带成了安全网 —— 万一请求短路没生效，这里仍会去广告，只是没省到流量。
+http-response ^https://(?:grpc\.biliapi\.net|app\.bili(?:bili\.com|api\.net))/bilibili\.app\.viewunite\.v1\.View/AIRelateAsync$ script-path=https://raw.githubusercontent.com/orangespiring/apple_scripts/main/scripts/BilibiliShortCircuit.js, requires-body=true, binary-body-mode=true, argument=[{logLevel}], tag=B站·相关视频·去广告保留推荐
 
 # — 请求侧（上游 Sparkle，直引）—
 
@@ -124,13 +133,14 @@ http-response ^https://api\.live\.bilibili\.com/xlive/(?:app-interface/v2/index/
 #     vipshop/imeituan 的唤起白名单 → 能自动拉起购物 App（用户报的「自动跳转」多半是它）
 #   · field 2 = 121 KB 的相关视频列表（带「我不想看/不感兴趣」菜单的标准推荐卡）
 #   插件原先只处理 RelatesFeed（`179_` 里已被清成 21 B），内容却全走这条 → 列表照常出现。
-#   ⚠️ 恒开、不受 cleanRelates 控制：[Rewrite] 能否用 enable= 无官方依据（见 §13b），
-#      宁可用已验证的 mock 空帧。要恢复相关推荐就把这两条里的 AIRelateAsync 去掉。
+#   📌 2026-09-08 起 **AIRelateAsync 已从下面这两条 mock 里移出**，改由 [Script] 按 cleanRelates 分流
+#      （见上方「相关视频·去广告保留推荐」）。原先它是恒开 mock，导致关掉 cleanRelates 也没有推荐、
+#      开关名不副实（desc 写的是「关=仅去广告、保留推荐」）。
 # gRPC mock（青少年弹窗 / 默认搜索 / TFInfo / 结束页 / 暂停页）
 ^https://grpc\.biliapi\.net/bilibili\.app\.interface\.v1\.Teenagers/ModeStatus$ mock-response-body data-type=text data="AAAAABMKEQgCEgl0ZWVuYWdlcnMgAioA" mock-data-is-base64=true
 ^https://grpc\.biliapi\.net/bilibili\.app\.interface\.v1\.Search/DefaultWords$ mock-response-body data-type=text data="AAAAACEaHeaQnOe0ouinhumikeOAgeeVquWJp+aIlnVw5Li7KAE=" mock-data-is-base64=true
-^https://grpc\.biliapi\.net/bilibili\.app\.(?:view\.v1\.View/TFInfo|viewunite\.v1\.View/(?:PlayPause|ViewEndPage|AIRelateAsync))$ mock-response-body data-type=text data="AAAAAAA=" mock-data-is-base64=true
-^https://grpc\.biliapi\.net/bilibili\.app\.(?:interface\.v1\.(?:Teenagers/ModeStatus|Search/DefaultWords)|view\.v1\.View/TFInfo|viewunite\.v1\.View/(?:PlayPause|ViewEndPage|AIRelateAsync))$ response-header-add grpc-status 0
+^https://grpc\.biliapi\.net/bilibili\.app\.(?:view\.v1\.View/TFInfo|viewunite\.v1\.View/(?:PlayPause|ViewEndPage))$ mock-response-body data-type=text data="AAAAAAA=" mock-data-is-base64=true
+^https://grpc\.biliapi\.net/bilibili\.app\.(?:interface\.v1\.(?:Teenagers/ModeStatus|Search/DefaultWords)|view\.v1\.View/TFInfo|viewunite\.v1\.View/(?:PlayPause|ViewEndPage))$ response-header-add grpc-status 0
 
 # 详情页弹窗广告（`176_` 实测；纪录片/番剧这类 PGC 页最容易触发）
 #   · mall-dayu/muggle/iam = 会员购 in-app message，实测下发 maStyleType=COUPON_POPUP
